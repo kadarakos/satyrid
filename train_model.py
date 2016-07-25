@@ -36,44 +36,57 @@ def main(params):
                            selector=params["selector"],
                            patience=10,
                            maxlen=100,
-                           batch_size=64,
+                           batch_size=params['batch_size'],
                            valid_batch_size=64,
-                           validFreq=2000,
-                           dispFreq=1,
+                           validFreq=params['validFreq'],
+                           dispFreq=100,
                            saveFreq=1000,
-                           sampleFreq=250,
-                           dataset="coco",
+                           sampleFreq=params['sampleFreq'],
+                           dataset=params['dataset'],
                            use_dropout=params["use-dropout"],
                            use_dropout_lstm=params["use-dropout-lstm"],
-                           save_per_epoch=params["save-per-epoch"])
-    print "Final cost: {:.2f}".format(validerr.mean())
+                           save_per_epoch=params["save-per-epoch"],
+                           clipnorm=params['clipnorm'],
+                           clipvalue=params['clipvalue'],
+                           references=params['references'])
+    print("Best valid cost: %.2f}" % validerr)
 
 
 if __name__ == "__main__":
-    # These defaults should more or less reproduce the soft
-    # alignment model for the MS COCO dataset
-    defaults = {"model": "my_caption_model.npz",
+    # stochastic == hard attention
+    # deterministic == soft attention
+    defaults = {"model": "coco-soft_adam_dropout-dim1800-1e-4.npz",
+                #"attn-type": "stochastic",
                 "attn-type": "deterministic",
                 "dim-word": 512,
                 "ctx-dim": 512,
                 "dim": 1800,
+                "n-words": 9584,
                 "n-layers-att": 2,
                 "n-layers-out": 1,
                 "n-layers-lstm": 1,
                 "n-layers-init": 2,
-                "n-words": 10000,
                 "lstm-encoder": False,
-                "decay-c": 0.,
-                "alpha-c": 1.,
+                "decay-c": 1e-8, # L2 regularisation
+                "alpha-c": 1., # doubly-stochastic regularisation
                 "prev2out": True,
                 "ctx2out": True,
-                "learning-rate": 0.01,
+                "learning-rate": 0.0001, # not used for adadelta
                 "optimizer": "adam",
                 "selector": True,
                 "use-dropout": True,
                 "use-dropout-lstm": False,
                 "save-per-epoch": False,
-                "reload": False}
+                "reload": False,
+                "dispFreq": 5000, # show 5 samples from the model
+                "validFreq": 500, # check loss on validation data
+                "sampleFreq": 5000,
+                "batch_size": 64,
+                "clipnorm": 4.,
+                "clipvalue": 0.,
+                "references": "ref/coco/dev/",
+                "dataset": "coco" # dataset module
+                }
     # get updates from command line
     args = parser.parse_args()
     for change in args.changes:
