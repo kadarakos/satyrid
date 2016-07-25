@@ -18,6 +18,7 @@ import numpy
 import copy
 import os
 import time
+import subprocess
 
 from collections import OrderedDict
 from sklearn.cross_validation import KFold
@@ -40,7 +41,6 @@ import coco
 datasets = {'flickr8k': (flickr8k.load_data, flickr8k.prepare_data),
             'flickr30k': (flickr30k.load_data, flickr30k.prepare_data),
             'coco': (coco.load_data, coco.prepare_data)}
-
 
 def get_dataset(name):
     return datasets[name][0], datasets[name][1]
@@ -90,6 +90,7 @@ def _p(pp, name):
 
 # initialize Theano shared variables according to the initial parameters
 def init_tparams(params):
+    print "Init tparams"
     tparams = OrderedDict()
     for kk, pp in params.iteritems():
         tparams[kk] = theano.shared(params[kk], name=kk)
@@ -97,6 +98,7 @@ def init_tparams(params):
 
 # load parameters
 def load_params(path, params):
+    print "Loading params"
     pp = numpy.load(path)
     for kk, vv in params.iteritems():
         if kk not in pp:
@@ -163,7 +165,6 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
 def get_layer(name):
     fns = layers[name]
     return (eval(fns[0]), eval(fns[1]))
-
 
 # feedforward layer: affine transformation + point-wise nonlinearity
 def param_init_fflayer(options, params, prefix='ff', nin=None, nout=None):
@@ -274,6 +275,7 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond', nin=None, dim=None
     params[_p(prefix,'W')] = W
 
     # LSTM to LSTM
+    print "LSTM to LSTM"
     U = numpy.concatenate([ortho_weight(dim),
                            ortho_weight(dim),
                            ortho_weight(dim),
@@ -281,21 +283,26 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond', nin=None, dim=None
     params[_p(prefix,'U')] = U
 
     # bias to LSTM
+    print "bias to LSTM"
     params[_p(prefix,'b')] = numpy.zeros((4 * dim,)).astype('float32')
 
     # context to LSTM
+    print "context to LSTM"
     Wc = norm_weight(dimctx,dim*4)
     params[_p(prefix,'Wc')] = Wc
 
     # attention: context -> hidden
+    print "attention: context -> hidden"
     Wc_att = norm_weight(dimctx, ortho=False)
     params[_p(prefix,'Wc_att')] = Wc_att
 
     # attention: LSTM -> hidden
+    print "attention: LSTM -> hidden"
     Wd_att = norm_weight(dim,dimctx)
     params[_p(prefix,'Wd_att')] = Wd_att
 
     # attention: hidden bias
+    print "attention: hidden bias"
     b_att = numpy.zeros((dimctx,)).astype('float32')
     params[_p(prefix,'b_att')] = b_att
 
@@ -306,6 +313,7 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond', nin=None, dim=None
             params[_p(prefix,'b_att_%d'%lidx)] = numpy.zeros((dimctx,)).astype('float32')
 
     # attention:
+    print "attention"
     U_att = norm_weight(dimctx,1)
     params[_p(prefix,'U_att')] = U_att
     c_att = numpy.zeros((1,)).astype('float32')
@@ -313,6 +321,7 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond', nin=None, dim=None
 
     if options['selector']:
         # attention: selector
+        print "attention: selector"
         W_sel = norm_weight(dim, 1)
         params[_p(prefix, 'W_sel')] = W_sel
         b_sel = numpy.float32(0.)
@@ -518,6 +527,7 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
 # parameter initialization
 # [roughly in the same order as presented in section 3.1.2]
 def init_params(options):
+    print "Init params"
     params = OrderedDict()
     # embedding: [matrix E in paper]
     params['Wemb'] = norm_weight(options['n_words'], options['dim_word'])
@@ -530,11 +540,13 @@ def init_params(options):
                                       nin=options['ctx_dim'], dim=options['dim'])
         ctx_dim = options['dim'] * 2
     # init_state, init_cell: [top right on page 4]
+    print("init_state, init_cell")
     for lidx in xrange(1, options['n_layers_init']):
         params = get_layer('ff')[0](options, params, prefix='ff_init_%d'%lidx, nin=ctx_dim, nout=ctx_dim)
     params = get_layer('ff')[0](options, params, prefix='ff_state', nin=ctx_dim, nout=options['dim'])
     params = get_layer('ff')[0](options, params, prefix='ff_memory', nin=ctx_dim, nout=options['dim'])
     # decoder: LSTM: [equation (1)/(2)/(3)]
+    print("init_LSTM")
     params = get_layer('lstm_cond')[0](options, params, prefix='decoder',
                                        nin=options['dim_word'], dim=options['dim'],
                                        dimctx=ctx_dim)
@@ -547,6 +559,7 @@ def init_params(options):
                                                nin=options['dim'], dim=options['dim'],
                                                dimctx=ctx_dim)
     # readout: [equation (7)]
+    print("init_readout")
     params = get_layer('ff')[0](options, params, prefix='ff_logit_lstm', nin=options['dim'], nout=options['dim_word'])
     if options['ctx2out']:
         params = get_layer('ff')[0](options, params, prefix='ff_logit_ctx', nin=ctx_dim, nout=options['dim_word'])
@@ -556,7 +569,6 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_logit', nin=options['dim_word'], nout=options['n_words'])
 
     return params
-
 
 # build a training model
 def build_model(tparams, options, sampling=True):
@@ -728,6 +740,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         Takes the previous word/state/memory + ctx0 and runs ne
         step through the lstm (used for beam search)
     """
+    print "Starting to build sampler ..."
     # context: #annotations x dim
     ctx = tensor.matrix('ctx_sampler', dtype='float32')
     if options['lstm_encoder']:
@@ -994,7 +1007,6 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
 
     return sample, sample_score
 
-
 def pred_probs(f_log_probs, options, worddict, prepare_data, data, iterator, verbose=False):
     """ Get log probabilities of captions
     Parameters
@@ -1055,6 +1067,62 @@ def validate_options(options):
 
     return options
 
+def clip_norm(g, c, n):
+    if c > 0:
+        g = tensor.switch(n >= c, g * c / n, g)
+    return g
+
+# helper function to calculate and retrieve the BLEU score of a set of 
+# generated sentences.
+def bleu_score(refs, saveto):
+    subprocess.check_call(
+            ['perl multi-bleu.perl -lc %s/reference < %s.txt > %sBLEU'
+             % (refs, saveto, saveto)],
+            shell=True)
+    # BLEU = %f, B1p/B2p/B3p/B4p (BP=%f, ratio=%f, hyp_len=%d, ref_len=%d)
+    bleudata = open("%sBLEU" % (saveto)).readline()
+    data = bleudata.split(",")[0]
+    bleu4 = data.split("=")[1]
+    bleu4 = float(bleu4.lstrip())
+    return bleu4
+
+# helper function to generate the complete set of sentences for the
+# dev split. useful for model selection based on Meteor or BLEU.
+def generate_outputs(split, saveto, use_noise, tparams, f_init, f_next,
+        model_options, trng, word_idict, zero_pad=False):
+    ## Generate the validation data to monitor BLEU score
+    print "Generating sentences ...",
+    handle = open("%s.txt" % (saveto), "w")
+    # turn off dropout first
+    use_noise.set_value(0.)
+    for idx, ctx in enumerate(split):
+            cc = ctx.reshape(14*14,512).astype(theano.config.floatX)
+            if zero_pad:
+                cc0 = numpy.zeros((cc.shape[0]+1, cc.shape[1])).astype('float32')
+                cc0[:-1,:] = cc
+            else:
+                cc0 = cc
+            samples, scores = gen_sample(tparams, f_init, f_next, cc0, model_options,
+                                       trng=trng, k=5, maxlen=30,
+                                       stochastic=False)
+            # adjust for length bias
+            lengths = numpy.array([len(s) for s in samples])
+            scores = scores / lengths
+            best_sample = samples[numpy.argmin(scores)]
+            best_score = numpy.amin(scores)
+            # Decode the sample from encoding back to words
+            sample_output = ""
+            for tok in best_sample:
+                if tok == 0:
+                    break
+                if tok in word_idict:
+                    sample_output += word_idict[tok] + " "
+                else:
+                    sample_output += 'UNK' + " "
+            sample_output = sample_output.rstrip()
+            handle.write("%s\n" % sample_output)
+    handle.close()
+    print "done"
 
 """Note: all the hyperparameters are stored in a dictionary model_options (or options outside train).
    train() then proceeds to do the following:
@@ -1099,11 +1167,16 @@ def train(dim_word=100,  # word vector dimensionality
           use_dropout=False,  # setting this true turns on dropout at various points
           use_dropout_lstm=False,  # dropout on lstm gates
           reload_=False,
-          save_per_epoch=False): # this saves down the model every epoch
+          save_per_epoch=False, # this saves down the model every epoch
+          clipnorm=0.,
+          clipvalue=0.,
+          references=''):
 
     # hyperparam dict
     model_options = locals().copy()
     model_options = validate_options(model_options)
+    saveto="models/"+saveto
+    generate_to=saveto.replace("models/","outputs/")
 
     # reload options
     if reload_ and os.path.exists(saveto):
@@ -1203,6 +1276,11 @@ def train(dim_word=100,  # word vector dimensionality
         # updates from scan
         hard_attn_updates += opt_outs['attn_updates']
 
+    if model_options['clipnorm'] > 0.:
+        norm = tensor.sqrt(tensor.sum([tensor.sum(tensor.square(g)) for g in grads]))
+        grads = [clip_norm(g, model_options['clipnorm'], norm) for g in grads]
+    if model_options['clipvalue'] > 0.:
+        grads = [tensor.clip(g, -model_options['clipvalue'], model_options['clipvalue']) for g in grads]
     # to getthe cost after regularization or the gradients, use this
     # f_cost = theano.function([x, mask, ctx], cost, profile=False)
     # f_grad = theano.function([x, mask, ctx], grads, profile=False)
@@ -1229,6 +1307,11 @@ def train(dim_word=100,  # word vector dimensionality
         history_errs = numpy.load(saveto)['history_errs'].tolist()
     best_p = None
     bad_counter = 0
+    # save the model options to disk
+    pkl.dump(model_options, open('%s.pkl'%saveto, 'wb'))
+
+    # history_metrics holds the validation scores calculated by pycocoeval
+    history_metrics = []
 
     if validFreq == -1:
         validFreq = len(train[0])/batch_size
@@ -1239,6 +1322,7 @@ def train(dim_word=100,  # word vector dimensionality
 
     uidx = 0
     estop = False
+    best_err = numpy.inf
     for eidx in xrange(max_epochs):
         n_samples = 0
 
@@ -1278,17 +1362,27 @@ def train(dim_word=100,  # word vector dimensionality
             if numpy.mod(uidx, dispFreq) == 0:
                 print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
 
-            # Checkpoint
-            if numpy.mod(uidx, saveFreq) == 0:
-                print 'Saving...',
+            # Check validation loss
+            if numpy.mod(uidx, validFreq) == 0:
+                use_noise.set_value(0.)
+                valid_err = 0
 
-                if best_p is not None:
-                    params = copy.copy(best_p)
-                else:
-                    params = unzip(tparams)
-                numpy.savez(saveto, history_errs=history_errs, **params)
-                pkl.dump(model_options, open('%s.pkl'%saveto, 'wb'))
-                print 'Done'
+                if valid:
+                    valid_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, valid, kf_valid).mean()
+                    print 'Epoch ', eidx, ' Update ', uidx,  ' Valid Cost ', valid_err
+
+                    # the model with the best validation long likelihood is saved 
+                    # we save each set of parameters that reduced the cost with the
+                    # validation cost at the end of the filename
+                    if len(history_errs) > 0 and valid_err <= best_err:
+                        best_p = unzip(tparams)
+                        saving_to = "%s.best" % saveto.replace(".npz","")
+                        print('Saving model to %s' % saving_to)
+                        #params = copy.copy(best_p) unnecessary extra lines?
+                        #params = unzip(tparams)
+                        numpy.savez(saving_to, history_errs=history_errs, **best_p)
+                        bad_counter = 0
+                        best_err = valid_err
 
             # Print a generated sample as a sanity check
             if numpy.mod(uidx, sampleFreq) == 0:
@@ -1298,9 +1392,14 @@ def train(dim_word=100,  # word vector dimensionality
                 mask_s = mask
                 ctx_s = ctx
                 # generate and decode the a subset of the current training batch
-                for jj in xrange(numpy.minimum(10, len(caps))):
-                    sample, score = gen_sample(tparams, f_init, f_next, ctx_s[jj], model_options,
+                for jj in xrange(numpy.minimum(5, len(caps))):
+                    samples, scores = gen_sample(tparams, f_init, f_next, ctx_s[jj], model_options,
                                                trng=trng, k=5, maxlen=30, stochastic=False)
+                    # adjust for length bias
+                    lengths = numpy.array([len(s) for s in samples])
+                    scores = scores / lengths
+                    best_sample = samples[numpy.argmin(scores)]
+                    best_score = numpy.amin(scores)
                     # Decode the sample from encoding back to words
                     print 'Truth ',jj,': ',
                     for vv in x_s[:,jj]:
@@ -1311,57 +1410,64 @@ def train(dim_word=100,  # word vector dimensionality
                         else:
                             print 'UNK',
                     print
-                    for kk, ss in enumerate([sample[0]]):
-                        print 'Sample (', kk,') ', jj, ': ',
-                        for vv in ss:
-                            if vv == 0:
-                                break
-                            if vv in word_idict:
-                                print word_idict[vv],
-                            else:
-                                print 'UNK',
-                    print
-
-            # Log validation loss + checkpoint the model with the best validation log likelihood
-            if numpy.mod(uidx, validFreq) == 0:
-                use_noise.set_value(0.)
-                train_err = 0
-                valid_err = 0
-                test_err = 0
-
-                if valid:
-                    valid_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, valid, kf_valid).mean()
-                if test:
-                    test_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, test, kf_test).mean()
-
-                history_errs.append([valid_err, test_err])
-
-                # the model with the best validation long likelihood is saved seperately with a different name
-                if uidx == 0 or valid_err <= numpy.array(history_errs)[:,0].min():
-                    best_p = unzip(tparams)
-                    print 'Saving model with best validation ll'
-                    params = copy.copy(best_p)
-                    params = unzip(tparams)
-                    numpy.savez(saveto+'_bestll', history_errs=history_errs, **params)
-                    bad_counter = 0
-
-                # abort training if perplexity has been increasing for too long
-                if eidx > patience and len(history_errs) > patience and valid_err >= numpy.array(history_errs)[:-patience,0].min():
-                    bad_counter += 1
-                    if bad_counter > patience:
-                        print 'Early Stop!'
-                        estop = True
-                        break
-
-                print 'Train ', train_err, 'Valid ', valid_err, 'Test ', test_err
+                    print 'Sample ', jj, ': ',
+                    for tok in best_sample:
+                        if tok == 0:
+                            break
+                        if tok in word_idict:
+                            print word_idict[tok],
+                        else:
+                            print 'UNK',
+                    print '(', best_score, ')'
 
         print 'Seen %d samples' % n_samples
+
+        # generate the validation data to monitor metric score
+        generate_outputs(valid[1], generate_to+'-dev', use_noise, tparams, f_init, f_next,
+                         model_options, trng, word_idict)
+        metric = bleu_score(model_options['references'], generate_to+'-dev')
+        history_metrics.append(metric)
+        # Log validation loss + checkpoint the model with the best validation log likelihood
+        use_noise.set_value(0.)
+        valid_err = 0
+        test_err = 0
+
+        if valid:
+            valid_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, valid, kf_valid).mean()
+        if test:
+            test_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, test, kf_test).mean()
+
+        history_errs.append([valid_err, test_err])
+        best_metric = numpy.amax(history_metrics)
+        print("Epoch %d - Valid cost %.2f (best %.2f) - Metric %.2f (best %.2f) - Test cost %.2f"
+              % (eidx, valid_err, best_err, metric, best_metric, test_err))
+
+        # abort training if perplexity has been increasing for too long
+        if eidx > patience and len(history_errs) > patience and valid_err >= numpy.array(history_errs)[:-patience,0].min():
+             bad_counter += 1
+             if bad_counter > patience:
+                print 'Early Stop!'
+                estop = True
+                break
+
+        # the model with the best validation long likelihood is saved 
+        # we save each set of parameters that reduced the cost with the
+        # validation cost at the end of the filename
+        if uidx == 0 or valid_err <= numpy.array(history_errs)[:,0].min():
+            best_p = unzip(tparams)
+            saving_to = "%s.best" % (saveto.replace(".npz",""))
+            print('Saving model to %s' % saving_to)
+            #params = copy.copy(best_p) unnecessary extra lines?
+            #params = unzip(tparams)
+            numpy.savez(saving_to, history_errs=history_errs, **best_p)
+            bad_counter = 0
 
         if estop:
             break
 
         if save_per_epoch:
-            numpy.savez(saveto + '_epoch_' + str(eidx + 1), history_errs=history_errs, **unzip(tparams))
+            saving_to = "%s.%.2f" % (saveto.replace(".npz",""), valid_err)
+            numpy.savez(saving_to, history_errs=history_errs, **unzip(tparams))
 
     # use the best nll parameters for final checkpoint (if they exist)
     if best_p is not None:
@@ -1376,7 +1482,7 @@ def train(dim_word=100,  # word vector dimensionality
     if test:
         test_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, test, kf_test)
 
-    print 'Train ', train_err, 'Valid ', valid_err, 'Test ', test_err
+    #print 'Train ', train_err, 'Valid ', valid_err, 'Test ', test_err
 
     params = copy.copy(best_p)
     numpy.savez(saveto, zipped_params=best_p, train_err=train_err,
