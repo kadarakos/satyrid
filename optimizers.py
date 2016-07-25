@@ -75,7 +75,38 @@ def rmsprop(lr, tparams, grads, inp, cost, hard_attn_up):
 # See "Adam: A Method for Stochastic Optimization" Kingma et al. (ICLR 2015)
 # Theano implementation adapted from Soren Kaae Sonderby (https://github.com/skaae)
 # preprint: http://arxiv.org/abs/1412.6980
-def adam(lr, tparams, grads, inp, cost, hard_attn_up):
+
+def adam(lr, tparams, grads, inp, cost, hard_attn_up, beta1=0.9, beta2=0.999, e=1e-8):
+    gshared = [theano.shared(p.get_value() * numpy.float32(0.), name='%s_grad' % k)
+               for k, p in tparams.iteritems()]
+    gsup = [(gs, g) for gs, g in zip(gshared, grads)]
+
+    f_grad_shared = theano.function(inp, cost, updates=gsup+hard_attn_up)
+
+    updates = []
+
+    t_prev = theano.shared(numpy.float32(0.))
+    t = t_prev + 1.
+    lr_t = lr * tensor.sqrt(1. - beta2**t) / (1. - beta1**t)
+
+    for p, g in zip(tparams.values(), gshared):
+        m = theano.shared(p.get_value() * numpy.float32(0.), p.name + '_mean')
+        v = theano.shared(p.get_value() * numpy.float32(0.), p.name + '_variance')
+        m_t = beta1 * m + (1. - beta1) * g
+        v_t = beta2 * v + (1. - beta2) * g**2
+        step = lr_t * m_t / (tensor.sqrt(v_t) + e)
+        p_t = p - step
+        updates.append((m, m_t))
+        updates.append((v, v_t))
+        updates.append((p, p_t))
+    updates.append((t_prev, t))
+
+    f_update = theano.function([lr], [], updates=updates,
+                               on_unused_input='ignore')
+
+    return f_grad_shared, f_update
+
+def old_adam(lr, tparams, grads, inp, cost, hard_attn_up):
     gshared = [theano.shared(p.get_value() * numpy.float32(0.), name='%s_grad'%k) for k, p in tparams.iteritems()]
     gsup = [(gs, g) for gs, g in zip(gshared, grads)]
 
