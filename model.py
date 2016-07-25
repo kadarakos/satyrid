@@ -1175,7 +1175,7 @@ def train(dim_word=100,  # word vector dimensionality
     # hyperparam dict
     model_options = locals().copy()
     model_options = validate_options(model_options)
-    saveto="models/"+saveto
+    saveto="checkpoints/"+saveto
     generate_to=saveto.replace("models/","outputs/")
 
     # reload options
@@ -1323,6 +1323,7 @@ def train(dim_word=100,  # word vector dimensionality
     uidx = 0
     estop = False
     best_err = numpy.inf
+    best_metric = 0
     for eidx in xrange(max_epochs):
         n_samples = 0
 
@@ -1376,7 +1377,7 @@ def train(dim_word=100,  # word vector dimensionality
                     # validation cost at the end of the filename
                     if len(history_errs) > 0 and valid_err <= best_err:
                         best_p = unzip(tparams)
-                        saving_to = "%s.best" % saveto.replace(".npz","")
+                        saving_to = "%s.cost_best" % saveto.replace(".npz","")
                         print('Saving model to %s' % saving_to)
                         #params = copy.copy(best_p) unnecessary extra lines?
                         #params = unzip(tparams)
@@ -1426,7 +1427,6 @@ def train(dim_word=100,  # word vector dimensionality
         generate_outputs(valid[1], generate_to+'-dev', use_noise, tparams, f_init, f_next,
                          model_options, trng, word_idict)
         metric = bleu_score(model_options['references'], generate_to+'-dev')
-        history_metrics.append(metric)
         # Log validation loss + checkpoint the model with the best validation log likelihood
         use_noise.set_value(0.)
         valid_err = 0
@@ -1438,9 +1438,6 @@ def train(dim_word=100,  # word vector dimensionality
             test_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, test, kf_test).mean()
 
         history_errs.append([valid_err, test_err])
-        best_metric = numpy.amax(history_metrics)
-        print("Epoch %d - Valid cost %.2f (best %.2f) - Metric %.2f (best %.2f) - Test cost %.2f"
-              % (eidx, valid_err, best_err, metric, best_metric, test_err))
 
         # abort training if perplexity has been increasing for too long
         if eidx > patience and len(history_errs) > patience and valid_err >= numpy.array(history_errs)[:-patience,0].min():
@@ -1453,14 +1450,27 @@ def train(dim_word=100,  # word vector dimensionality
         # the model with the best validation long likelihood is saved 
         # we save each set of parameters that reduced the cost with the
         # validation cost at the end of the filename
-        if uidx == 0 or valid_err <= numpy.array(history_errs)[:,0].min():
+        if valid_err <= best_err:
             best_p = unzip(tparams)
-            saving_to = "%s.best" % (saveto.replace(".npz",""))
+            saving_to = "%s.cost_best" % (saveto.replace(".npz",""))
             print('Saving model to %s' % saving_to)
             #params = copy.copy(best_p) unnecessary extra lines?
             #params = unzip(tparams)
             numpy.savez(saving_to, history_errs=history_errs, **best_p)
             bad_counter = 0
+
+        # save the model with the best metric score separately because
+        # validation cost is not necessarily strongly correlated with metrics
+        if metric >= best_metric:
+            saving_to = "%s.metric_best" % (saveto.replace(".npz",""))
+            print('Saving model to %s' % saving_to)
+            #params = copy.copy(best_p) unnecessary extra lines?
+            #params = unzip(tparams)
+            numpy.savez(saving_to, history_errs=history_errs, **best_p)
+            best_metric = metric
+
+        print("Epoch %d - Valid cost %.2f (best %.2f) - Metric %.2f (best %.2f) - Test cost %.2f"
+              % (eidx, valid_err, best_err, metric, best_metric, test_err))
 
         if estop:
             break

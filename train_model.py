@@ -4,7 +4,7 @@ be modified to coco/flickr30k/flickr8k
 """
 import argparse
 
-from capgen import train
+from model import train
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--attn_type",  default="deterministic",
@@ -55,13 +55,15 @@ def main(params):
 if __name__ == "__main__":
     # stochastic == hard attention
     # deterministic == soft attention
-    defaults = {"model": "coco-soft_adam_dropout-dim1800-1e-4.npz",
-                #"attn-type": "stochastic",
-                "attn-type": "deterministic",
+    defaults = {"model": "flickr30k-soft_adam.npz",
+                "dataset": "flickr30k", # dataset module
+                "references": "ref/30k/dev/",
+                #"attn-type": "stochastic", # hard attention
+                "attn-type": "deterministic", # soft attention
                 "dim-word": 512,
                 "ctx-dim": 512,
-                "dim": 1800,
-                "n-words": 9584,
+                "dim": 1000,
+                "n-words": 10000,
                 "n-layers-att": 2,
                 "n-layers-out": 1,
                 "n-layers-lstm": 1,
@@ -82,10 +84,8 @@ if __name__ == "__main__":
                 "validFreq": 500, # check loss on validation data
                 "sampleFreq": 5000,
                 "batch_size": 64,
-                "clipnorm": 4.,
-                "clipvalue": 0.,
-                "references": "ref/coco/dev/",
-                "dataset": "coco" # dataset module
+                "clipnorm": 4., # value to clip the norm of the gradients
+                "clipvalue": 0., # value to clip the value of the updates
                 }
     # get updates from command line
     args = parser.parse_args()
