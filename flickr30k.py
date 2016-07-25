@@ -5,7 +5,9 @@ import sys
 import time
 
 import numpy
+import tables
 
+#def prepare_data(caps, features, worddict, idict, maxlen=None, n_words=10000, zero_pad=False):
 def prepare_data(caps, features, worddict, maxlen=None, n_words=10000, zero_pad=False):
     # x: a list of sentences
     seqs = []
@@ -13,6 +15,7 @@ def prepare_data(caps, features, worddict, maxlen=None, n_words=10000, zero_pad=
     for cc in caps:
         seqs.append([worddict[w] if worddict[w] < n_words else 1 for w in cc[0].split()])
         feat_list.append(features[cc[1]])
+
 
     lengths = [len(s) for s in seqs]
 
@@ -32,10 +35,9 @@ def prepare_data(caps, features, worddict, maxlen=None, n_words=10000, zero_pad=
         if len(lengths) < 1:
             return None, None, None
 
-    y = numpy.zeros((len(feat_list), feat_list[0].shape[1])).astype('float32')
+    y = numpy.zeros((len(feat_list), 14*14, 512)).astype('float32')
     for idx, ff in enumerate(feat_list):
-        y[idx,:] = numpy.array(ff.todense())
-    y = y.reshape([y.shape[0], 14*14, 512])
+        y[idx] = ff.reshape(14*14,512)
     if zero_pad:
         y_pad = numpy.zeros((y.shape[0], y.shape[1]+1, y.shape[2])).astype('float32')
         y_pad[:,:-1,:] = y
@@ -52,7 +54,8 @@ def prepare_data(caps, features, worddict, maxlen=None, n_words=10000, zero_pad=
 
     return x, x_mask, y
 
-def load_data(load_train=True, load_dev=True, load_test=True, path='./'):
+def load_data(load_train=True, load_dev=True, load_test=True,
+        path='data/flickr30k/'):
     ''' Loads the dataset
 
     :type dataset: string
@@ -65,24 +68,27 @@ def load_data(load_train=True, load_dev=True, load_test=True, path='./'):
     print '... loading data'
 
     if load_train:
-        with open(path+'flicker_30k_align.train.pkl', 'rb') as f:
-            train_cap = pkl.load(f)
-            train_feat = pkl.load(f)
+        train_cap = pkl.load(open(path+'train.pkl', 'rb'))
+        train_file = tables.open_file(path+'train-cnn_features.hdf5', mode='r')
+        train_feat = train_file.root.feats[:]
         train = (train_cap, train_feat)
+        print '... loaded train'
     else:
         train = None
     if load_test:
-        with open(path+'flicker_30k_align.test.pkl', 'rb') as f:
-            test_cap = pkl.load(f)
-            test_feat = pkl.load(f)
+        test_cap = pkl.load(open(path+'test.pkl', 'rb'))
+        test_file = tables.open_file(path+'test-cnn_features.hdf5', mode='r')
+        test_feat = test_file.root.feats[:]
         test = (test_cap, test_feat)
+        print '... loaded test'
     else:
         test = None
     if load_dev:
-        with open(path+'flicker_30k_align.dev.pkl', 'rb') as f:
-            dev_cap = pkl.load(f)
-            dev_feat = pkl.load(f)
+        dev_cap = pkl.load(open(path+'dev.pkl', 'rb'))
+        dev_file = tables.open_file(path+'dev-cnn_features.hdf5', mode='r')
+        dev_feat = dev_file.root.feats[:]
         valid = (dev_cap, dev_feat)
+        print '... loaded dev'
     else:
         valid = None
 
