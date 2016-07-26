@@ -7,13 +7,16 @@ import argparse
 import numpy
 import cPickle as pkl
 
-from capgen import build_sampler, gen_sample, \
+from model import build_sampler, gen_sample, \
                    load_params, \
                    init_params, \
                    init_tparams, \
                    get_dataset \
 
 from multiprocessing import Process, Queue
+from collections import deque
+
+import theano
 
 
 # single instance of a sampling process
@@ -32,7 +35,8 @@ def gen_model(queue, rqueue, pid, model, options, k, normalize, word_idict, samp
     tparams = init_tparams(params)
 
     # build the sampling computational graph
-    # see capgen.py for more detailed explanations
+    # see model.py for more detailed explanations
+    print "Starting to build sampler ..."
     f_init, f_next = build_sampler(tparams, options, use_noise, trng, sampling=sampling)
 
     def _gencap(cc0):
@@ -58,7 +62,8 @@ def gen_model(queue, rqueue, pid, model, options, k, normalize, word_idict, samp
 
     return 
 
-def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5, datasets='dev,test', sampling=False, pkl_name=None):
+def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5,
+         splits='dev,test', sampling=False, pkl_name=None, dataset=None):
     # load model model_options
     if pkl_name is None:
         pkl_name = model
@@ -66,9 +71,10 @@ def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5, datas
         options = pkl.load(f)
 
     # fetch data, skip ones we aren't using to save time
-    load_data, prepare_data = get_dataset(options['dataset'])
-    _, valid, test, worddict = load_data(load_train=False, load_dev=True if 'dev' in datasets else False,
-                                             load_test=True if 'test' in datasets else False)
+    load_data, prepare_data = get_dataset(options['dataset'] if dataset == None else dataset)
+    _, valid, test, worddict = load_data(load_train=False, load_dev=True if 'dev' in splits else False,
+                                         load_test=True if 'test' in splits else False)
+                                         #load_caps=False)
 
     # <eos> means end of sequence (aka periods), UNK means unknown
     word_idict = dict()
@@ -77,31 +83,22 @@ def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5, datas
     word_idict[0] = '<eos>'
     word_idict[1] = 'UNK'
 
+    # index -> words
+    def _seqs2words(caps):
     # create processes
+    print "Creating processes ..."
     queue = Queue()
     rqueue = Queue()
     processes = [None] * n_process
     for midx in xrange(n_process):
-        processes[midx] = Process(target=gen_model, 
+        processes[midx] = Process(target=gen_model,
                                   args=(queue,rqueue,midx,model,options,k,normalize,word_idict, sampling))
         processes[midx].start()
-
-    # index -> words
-    def _seqs2words(caps):
-        capsw = []
-        for cc in caps:
-            ww = []
-            for w in cc:
-                if w == 0:
-                    break
-                ww.append(word_idict[w])
-            capsw.append(' '.join(ww))
-        return capsw
 
     # unsparsify, reshape, and queue
     def _send_jobs(contexts):
         for idx, ctx in enumerate(contexts):
-            cc = ctx.todense().reshape([14*14,512])
+            cc = ctx.reshape([14*14, 512]).astype(theano.config.floatX)
             if zero_pad:
                 cc0 = numpy.zeros((cc.shape[0]+1, cc.shape[1])).astype('float32')
                 cc0[:-1,:] = cc
@@ -119,7 +116,7 @@ def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5, datas
                 print 'Sample ', (idx+1), '/', n_samples, ' Done'
         return caps
 
-    ds = datasets.strip().split(',')
+    ds = splits.strip().split(',')
 
     # send all the features for the various datasets
     for dd in ds:
@@ -144,15 +141,21 @@ def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5, datas
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-k', type=int, default=1)
+    parser.add_argument('-k', type=int, default=1) # beam width
     parser.add_argument('-sampling', action="store_true", default=False) # this only matters for hard attention
     parser.add_argument('-p', type=int, default=5, help="number of processes to use")
-    parser.add_argument('-n', action="store_true", default=False)
+    parser.add_argument('-n', action="store_true", default=False) # normalise?
     parser.add_argument('-z', action="store_true", default=False)
-    parser.add_argument('-d', type=str, default='dev,test')
+    parser.add_argument('-s', type=str, default='dev,test') # splits
     parser.add_argument('-pkl_name', type=str, default=None, help="name of pickle file (without the .pkl)")
     parser.add_argument('model', type=str)
     parser.add_argument('saveto', type=str)
+    parser.add_argument('--dataset', type=str, default=None,
+                        help="name of the dataset module to use for language\
+                              generation. Defaults to options['dataset']")
 
     args = parser.parse_args()
-    main(args.model, args.saveto, k=args.k, zero_pad=args.z, pkl_name=args.pkl_name,  n_process=args.p, normalize=args.n, datasets=args.d, sampling=args.sampling)
+    main(args.model, args.saveto, k=args.k, zero_pad=args.z,
+            pkl_name=args.pkl_name,  n_process=args.p, normalize=args.n,
+            splits=args.s, sampling=args.sampling,
+            dataset=args.dataset)
