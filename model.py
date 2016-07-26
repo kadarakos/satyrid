@@ -1170,7 +1170,8 @@ def train(dim_word=100,  # word vector dimensionality
           save_per_epoch=False, # this saves down the model every epoch
           clipnorm=0.,
           clipvalue=0.,
-          references=''):
+          references='',
+          use_metrics=False):
 
     # hyperparam dict
     model_options = locals().copy()
@@ -1424,9 +1425,10 @@ def train(dim_word=100,  # word vector dimensionality
         print 'Seen %d samples' % n_samples
 
         # generate the validation data to monitor metric score
-        generate_outputs(valid[1], generate_to+'-dev', use_noise, tparams, f_init, f_next,
-                         model_options, trng, word_idict)
-        metric = bleu_score(model_options['references'], generate_to+'-dev')
+        if use_metrics:
+            generate_outputs(valid[1], generate_to+'-dev', use_noise, tparams, f_init, f_next,
+                             model_options, trng, word_idict)
+            metric = bleu_score(model_options['references'], generate_to+'-dev')
         # Log validation loss + checkpoint the model with the best validation log likelihood
         use_noise.set_value(0.)
         valid_err = 0
@@ -1454,23 +1456,23 @@ def train(dim_word=100,  # word vector dimensionality
             best_p = unzip(tparams)
             saving_to = "%s.cost_best" % (saveto.replace(".npz",""))
             print('Saving model to %s' % saving_to)
-            #params = copy.copy(best_p) unnecessary extra lines?
-            #params = unzip(tparams)
             numpy.savez(saving_to, history_errs=history_errs, **best_p)
             bad_counter = 0
 
         # save the model with the best metric score separately because
         # validation cost is not necessarily strongly correlated with metrics
-        if metric >= best_metric:
+        if use_metrics and metric >= best_metric:
             saving_to = "%s.metric_best" % (saveto.replace(".npz",""))
             print('Saving model to %s' % saving_to)
-            #params = copy.copy(best_p) unnecessary extra lines?
-            #params = unzip(tparams)
             numpy.savez(saving_to, history_errs=history_errs, **best_p)
             best_metric = metric
 
-        print("Epoch %d - Valid cost %.2f (best %.2f) - Metric %.2f (best %.2f) - Test cost %.2f"
-              % (eidx, valid_err, best_err, metric, best_metric, test_err))
+        if use_metrics:
+            print("Epoch %d - Valid cost %.2f (best %.2f) - Metric %.2f (best %.2f) - Test cost %.2f"
+                  % (eidx, valid_err, best_err, metric, best_metric, test_err))
+        else:
+            print("Epoch %d - Valid cost %.2f (best %.2f) - Test cost %.2f"
+                  % (eidx, valid_err, best_err, test_err))
 
         if estop:
             break
@@ -1491,8 +1493,6 @@ def train(dim_word=100,  # word vector dimensionality
         valid_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, valid, kf_valid)
     if test:
         test_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, test, kf_test)
-
-    #print 'Train ', train_err, 'Valid ', valid_err, 'Test ', test_err
 
     params = copy.copy(best_p)
     numpy.savez(saveto, zipped_params=best_p, train_err=train_err,

@@ -53,7 +53,8 @@ train_model.py`.  See the documentation in `train_model.py` and
 
 If you want to use the `metrics.py` script to control training the
 model (e.g. save model parameters based on Meteor or CIDEr), then pass
-the `--use_metrics` argument and install the dependencies for the
+`changes "use_metrics": True` as an argument and install the
+dependencies for the
 [coco-caption](https://github.com/tylin/coco-caption) for the
 requirements.
 

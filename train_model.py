@@ -14,7 +14,7 @@ parser.add_argument("changes",  nargs="*",
 
 
 def main(params):
-    # see documentation in capgen.py for more details on hyperparams
+    # see documentation in model.py for more details on hyperparams
     _, validerr, _ = train(saveto=params["model"],
                            attn_type=params["attn-type"],
                            reload_=params["reload"],
@@ -48,7 +48,8 @@ def main(params):
                            save_per_epoch=params["save-per-epoch"],
                            clipnorm=params['clipnorm'],
                            clipvalue=params['clipvalue'],
-                           references=params['references'])
+                           references=params['references'],
+                           use_metrics=params['use_metrics'])
     print("Best valid cost: %.2f}" % validerr)
 
 
@@ -86,6 +87,7 @@ if __name__ == "__main__":
                 "batch_size": 64,
                 "clipnorm": 4., # value to clip the norm of the gradients
                 "clipvalue": 0., # value to clip the value of the updates
+                "use_metrics": False # measure training progress using metrics
                 }
     # get updates from command line
     args = parser.parse_args()
