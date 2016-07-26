@@ -12,7 +12,7 @@ import tables
 import json
 import argparse
 
-# Change these to point to Caffe on your syste
+# Change these to point to Caffe on your system
 VGG_MODEL = '/home/delliott/src/caffe/models/vgg_19/VGG_ILSVRC_19_layers.caffemodel'
 VGG_DEPLOY = '/home/delliott/src/caffe/models/vgg_19/VGG_ILSVRC_19_layers_deploy.prototxt'
 
