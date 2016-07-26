@@ -83,8 +83,6 @@ def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5,
     word_idict[0] = '<eos>'
     word_idict[1] = 'UNK'
 
-    # index -> words
-    def _seqs2words(caps):
     # create processes
     print "Creating processes ..."
     queue = Queue()
@@ -94,6 +92,18 @@ def main(model, saveto, k=5, normalize=False, zero_pad=False, n_process=5,
         processes[midx] = Process(target=gen_model,
                                   args=(queue,rqueue,midx,model,options,k,normalize,word_idict, sampling))
         processes[midx].start()
+
+    # index -> words
+    def _seqs2words(caps):
+        capsw = []
+        for cc in caps:
+            ww = []
+            for w in cc:
+                if w == 0:
+                    break
+                ww.append(word_idict[w])
+            capsw.append(' '.join(ww))
+        return capsw
 
     # unsparsify, reshape, and queue
     def _send_jobs(contexts):
