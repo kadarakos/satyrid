@@ -4,12 +4,13 @@ using the COCO metrics scripts
 """
 import argparse
 import logging
+import pprint
 
 # this requires the coco-caption package, https://github.com/tylin/coco-caption
-from pycocoevalcap.bleu.bleu import Bleu
-from pycocoevalcap.rouge.rouge import Rouge
-from pycocoevalcap.cider.cider import Cider
-from pycocoevalcap.meteor.meteor import Meteor
+from evaluate.pycocoevalcap.bleu.bleu import Bleu
+from evaluate.pycocoevalcap.rouge.rouge import Rouge
+from evaluate.pycocoevalcap.cider.cider import Cider
+from evaluate.pycocoevalcap.meteor.meteor import Meteor
 
 
 parser = argparse.ArgumentParser(
@@ -22,7 +23,7 @@ parser.add_argument("references", type=argparse.FileType('r'), nargs="+",
 
 
 def load_textfiles(references, hypothesis):
-    print "The number of references is {}".format(len(references))
+    #print "The number of references is {}".format(len(references))
     hypo = {idx: [lines.strip()] for (idx, lines) in enumerate(hypothesis)}
     # take out newlines before creating dictionary
     raw_refs = [map(str.strip, r) for r in zip(*references)]
@@ -60,4 +61,4 @@ if __name__ == '__main__':
     logger = logging.getLogger('Computing Metrics:')
     args = parser.parse_args()
     ref, hypo = load_textfiles(args.references, args.hypothesis)
-    print score(ref, hypo)
+    pprint.pprint(score(ref, hypo), width=1)
