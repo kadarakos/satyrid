@@ -43,7 +43,7 @@ def get_cnn_features(image_list, split, batch_size, relu=False):
     print("Finished processing %d images" % len(data_storage))
     hdf5_file.close()
 
-def get_data_by_split(json_data, split):
+def get_data_by_split(json_data, split, lower=False):
     data = dict()
     data['sents'] = []
     data['files'] = []
@@ -55,7 +55,8 @@ def get_data_by_split(json_data, split):
         for sent in img['sentences']:
             text = sent['raw']
             text = text.replace('\n','')
-            text = text.lower()
+            if lower:
+                text = text.lower()
             text = ''.join(ch for ch in text if ch not in exclude)
             text = text.strip()
             if data_split == split:
@@ -72,13 +73,13 @@ def get_data_by_split(json_data, split):
           % (split, len(data['sents']), len(data['files'])))
     return data
 
-def process_json(json_path):
+def process_json(json_path, lower=False):
     json_data = json.load(open(json_path))
 
     data = dict()
-    data['train'] = get_data_by_split(json_data, 'train')
-    data['val'] = get_data_by_split(json_data, 'val')
-    data['test'] = get_data_by_split(json_data, 'test')
+    data['train'] = get_data_by_split(json_data, 'train', lower)
+    data['val'] = get_data_by_split(json_data, 'val', lower)
+    data['test'] = get_data_by_split(json_data, 'test', lower)
 
     with open('train.pkl', 'wb') as f:
         cPickle.dump(data['train']['sents'], f, protocol=2)
@@ -91,7 +92,8 @@ def process_json(json_path):
 
 def make_dataset(args):
     # get the filenames of the images in the JSON file
-    data = process_json(args.json_path)
+    data = process_json(args.json_path, lower=args.lower)
+
     for split in data:
         files = ['%s/%s' % (args.images_path, x) for x in data[split]['files']]
         get_cnn_features(files, split, args.batch_size, relu=args.relu)
@@ -121,6 +123,8 @@ if __name__ == "__main__":
     parser.add_argument("--json_path", type=str,
                         help="Path to the JSON file to build the bundles",
                         default="data/flickr30k")
+    parser.add_argument("--lower", action="store_true",
+                        help="Lowercase the input text?")
 
     arguments = parser.parse_args()
 
