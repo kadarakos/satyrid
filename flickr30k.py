@@ -7,7 +7,6 @@ import time
 import numpy
 import tables
 
-#def prepare_data(caps, features, worddict, idict, maxlen=None, n_words=10000, zero_pad=False):
 def prepare_data(caps, features, worddict, maxlen=None, n_words=10000, zero_pad=False):
     # x: a list of sentences
     seqs = []

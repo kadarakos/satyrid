@@ -35,6 +35,7 @@ def main(params):
                            optimizer=params["optimizer"],
                            selector=params["selector"],
                            patience=10,
+                           max_epochs=params['max_epochs'],
                            maxlen=100,
                            batch_size=params['batch_size'],
                            valid_batch_size=64,
@@ -49,14 +50,16 @@ def main(params):
                            clipnorm=params['clipnorm'],
                            clipvalue=params['clipvalue'],
                            references=params['references'],
-                           use_metrics=params['use_metrics'])
-    print("Best valid cost: %.2f}" % validerr)
+                           use_metrics=params['use_metrics'],
+                           metric=params['metric'],
+                           force_metrics=params['force_metrics'])
+    print("Average valid cost: {:.2f}".format(validerr.mean()))
 
 
 if __name__ == "__main__":
-    # stochastic == hard attention
-    # deterministic == soft attention
-    defaults = {"model": "flickr30k-soft_adam.npz",
+    # "attn-type": "stochastic" == hard attention
+    # "attn-type": "deterministic: == soft attention
+    defaults = {"model": "flickr30k-soft_attn-w512-h1000.npz",
                 "dataset": "flickr30k", # dataset module
                 "references": "ref/30k/dev/",
                 #"attn-type": "stochastic", # hard attention
@@ -76,18 +79,24 @@ if __name__ == "__main__":
                 "ctx2out": True,
                 "learning-rate": 0.0001, # not used for adadelta
                 "optimizer": "adam",
+                "max_epochs": 5,
                 "selector": True,
                 "use-dropout": True,
                 "use-dropout-lstm": False,
                 "save-per-epoch": False,
                 "reload": False,
-                "dispFreq": 5000, # show 5 samples from the model
-                "validFreq": 500, # check loss on validation data
+                "dispFreq": 5000, # updates between showing 5 samples from the model
+                "validFreq": 500, # updates between validation data loss check
                 "sampleFreq": 5000,
                 "batch_size": 64,
                 "clipnorm": 4., # value to clip the norm of the gradients
                 "clipvalue": 0., # value to clip the value of the updates
-                "use_metrics": False # measure training progress using metrics
+                "use_metrics": False, # measure training progress using metrics
+                "metric": "Bleu_4", # METEOR, Bleu_{1,2,3,4}, ROUGE_L, CIDEr
+                # By default, metrics are computed at the end of each epoch.
+                # Do you want to also compute metrics when val loss decreases?
+                # This will substantially increase training time!
+                "force_metrics": False
                 }
     # get updates from command line
     args = parser.parse_args()

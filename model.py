@@ -19,6 +19,7 @@ import copy
 import os
 import time
 import subprocess
+import argparse
 
 from collections import OrderedDict
 from sklearn.cross_validation import KFold
@@ -36,6 +37,8 @@ import flickr8k
 import flickr30k
 import coco
 
+# monitor training performance using external metrics
+import metrics
 
 # datasets: 'name', 'load_data: returns iterator', 'prepare_data: some preprocessing'
 datasets = {'flickr8k': (flickr8k.load_data, flickr8k.prepare_data),
@@ -1072,21 +1075,25 @@ def clip_norm(g, c, n):
         g = tensor.switch(n >= c, g * c / n, g)
     return g
 
-# helper function to calculate and retrieve the BLEU score of a set of 
-# generated sentences.
-def bleu_score(refs, saveto):
-    subprocess.check_call(
-            ['perl multi-bleu.perl -lc %s/reference < %s.txt > %sBLEU'
-             % (refs, saveto, saveto)],
-            shell=True)
-    # BLEU = %f, B1p/B2p/B3p/B4p (BP=%f, ratio=%f, hyp_len=%d, ref_len=%d)
-    bleudata = open("%sBLEU" % (saveto)).readline()
-    data = bleudata.split(",")[0]
-    bleu4 = data.split("=")[1]
-    bleu4 = float(bleu4.lstrip())
-    return bleu4
+# helper function to calculate and retrieve the metric score of
+# generated sentences. Defaults to returning METEOR, controlled by the
+# options['metric'] parameter
+def check_metrics(hyps, refs, metric="METEOR"):
+    # This block of code is extremely ugly
+    hyps = hyps + ".txt"
+    parser = argparse.ArgumentParser()
+    refs_list = os.listdir(refs)
+    refs_list = ["%s/%s" % (refs, x) for x in refs_list]
+    parser.add_argument("refs", type=argparse.FileType('r'), nargs="+")
+    parser.add_argument("hyps", type=argparse.FileType('r'))
+    refs_list.append(hyps)
+    args = parser.parse_args(refs_list)
 
-# helper function to generate the complete set of sentences for the
+    references, hypotheses = metrics.load_textfiles(args.refs, args.hyps)
+    scores = metrics.score(references, hypotheses)
+    return 100*scores[metric] # shift scores from 0-1 to 0-100
+
+# helper function to generate the complete set of sentences for
 # dev split. useful for model selection based on Meteor or BLEU.
 def generate_outputs(split, saveto, use_noise, tparams, f_init, f_next,
         model_options, trng, word_idict, zero_pad=False):
@@ -1171,13 +1178,18 @@ def train(dim_word=100,  # word vector dimensionality
           clipnorm=0.,
           clipvalue=0.,
           references='',
-          use_metrics=False):
+          use_metrics=False,
+          metric="METEOR",
+          force_metrics=False):
 
     # hyperparam dict
     model_options = locals().copy()
     model_options = validate_options(model_options)
+
+    # where we will save model parameters
     saveto="checkpoints/"+saveto
-    generate_to=saveto.replace("models/","outputs/")
+    # where we will save generated sentences
+    generate_to=saveto.replace("checkpoints/","outputs/")
 
     # reload options
     if reload_ and os.path.exists(saveto):
@@ -1291,8 +1303,6 @@ def train(dim_word=100,  # word vector dimensionality
     lr = tensor.scalar(name='lr')
     f_grad_shared, f_update = eval(optimizer)(lr, tparams, grads, inps, cost, hard_attn_updates)
 
-    print 'Optimization'
-
     # [See note in section 4.3 of paper]
     train_iter = HomogeneousData(train, batch_size=batch_size, maxlen=maxlen)
 
@@ -1364,7 +1374,7 @@ def train(dim_word=100,  # word vector dimensionality
             if numpy.mod(uidx, dispFreq) == 0:
                 print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
 
-            # Check validation loss
+            # Check validation loss and compute metrics if forced
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
                 valid_err = 0
@@ -1376,15 +1386,39 @@ def train(dim_word=100,  # word vector dimensionality
                     # the model with the best validation long likelihood is saved 
                     # we save each set of parameters that reduced the cost with the
                     # validation cost at the end of the filename
-                    if len(history_errs) > 0 and valid_err <= best_err:
-                        best_p = unzip(tparams)
-                        saving_to = "%s.cost_best" % saveto.replace(".npz","")
-                        print('Saving model to %s' % saving_to)
-                        #params = copy.copy(best_p) unnecessary extra lines?
-                        #params = unzip(tparams)
-                        numpy.savez(saving_to, history_errs=history_errs, **best_p)
-                        bad_counter = 0
-                        best_err = valid_err
+                    if valid_err <= best_err:
+                        if use_metrics and force_metrics and eidx > 0:
+                            # Don't waste time generating descriptions during
+                            # the first epoch of training
+                            generate_outputs(valid[1], generate_to+'-dev',
+                                             use_noise, tparams, f_init,
+                                             f_next, model_options, trng,
+                                             word_idict)
+                            m_score = check_metrics(generate_to+'-dev',
+                                                    references, metric)
+                            print("%s %.2f" % (metric, m_score))
+                            # save the model with the best metric score
+                            # separately because val cost is not necessarily
+                            # strongly correlated with metrics
+                            if m_score > best_metric:
+                                best_p = unzip(tparams)
+                                if best_p is not None:
+                                    params = copy.copy(best_p)
+                                else:
+                                    params = unzip(tparams)
+                                print('Saving model to %s' % saveto)
+                                numpy.savez(saveto, history_errs=history_errs, **params)
+                                best_metric = m_score
+                        else:
+                            best_p = unzip(tparams)
+                            if best_p is not None:
+                                params = copy.copy(best_p)
+                            else:
+                                params = unzip(tparams)
+                            print('Saving model to %s' % saveto)
+                            numpy.savez(saveto, history_errs=history_errs, **params)
+                            bad_counter = 0
+                            best_err = valid_err
 
             # Print a generated sample as a sanity check
             if numpy.mod(uidx, sampleFreq) == 0:
@@ -1428,7 +1462,8 @@ def train(dim_word=100,  # word vector dimensionality
         if use_metrics:
             generate_outputs(valid[1], generate_to+'-dev', use_noise, tparams, f_init, f_next,
                              model_options, trng, word_idict)
-            metric = bleu_score(model_options['references'], generate_to+'-dev')
+            m_score = check_metrics(generate_to+'-dev', references, metric)
+
         # Log validation loss + checkpoint the model with the best validation log likelihood
         use_noise.set_value(0.)
         valid_err = 0
@@ -1449,27 +1484,34 @@ def train(dim_word=100,  # word vector dimensionality
                 estop = True
                 break
 
+        # save the model with the best metric score separately because
+        # validation cost is not necessarily strongly correlated with metrics
+        if use_metrics:
+            if m_score >= best_metric:
+                best_p = unzip(tparams)
+                if best_p is not None:
+                    params = copy.copy(best_p)
+                else:
+                    params = unzip(tparams)
+                print('Saving model to %s' % saveto)
+                numpy.savez(saveto, history_errs=history_errs, **params)
+                best_metric = m_score
         # the model with the best validation long likelihood is saved 
         # we save each set of parameters that reduced the cost with the
         # validation cost at the end of the filename
-        if valid_err <= best_err:
+        elif valid_err <= best_err:
             best_p = unzip(tparams)
-            saving_to = "%s.cost_best" % (saveto.replace(".npz",""))
-            print('Saving model to %s' % saving_to)
-            numpy.savez(saving_to, history_errs=history_errs, **best_p)
+            if best_p is not None:
+                params = copy.copy(best_p)
+            else:
+                params = unzip(tparams)
+            print('Saving model to %s' % saveto)
+            numpy.savez(saveto, history_errs=history_errs, **params)
             bad_counter = 0
 
-        # save the model with the best metric score separately because
-        # validation cost is not necessarily strongly correlated with metrics
-        if use_metrics and metric >= best_metric:
-            saving_to = "%s.metric_best" % (saveto.replace(".npz",""))
-            print('Saving model to %s' % saving_to)
-            numpy.savez(saving_to, history_errs=history_errs, **best_p)
-            best_metric = metric
-
         if use_metrics:
-            print("Epoch %d - Valid cost %.2f (best %.2f) - Metric %.2f (best %.2f) - Test cost %.2f"
-                  % (eidx, valid_err, best_err, metric, best_metric, test_err))
+            print("Epoch %d - Valid cost %.2f (best %.2f) - %s %.2f (best %.2f) - Test cost %.2f"
+                  % (eidx, valid_err, best_err, metric, m_score, best_metric, test_err))
         else:
             print("Epoch %d - Valid cost %.2f (best %.2f) - Test cost %.2f"
                   % (eidx, valid_err, best_err, test_err))
@@ -1481,7 +1523,7 @@ def train(dim_word=100,  # word vector dimensionality
             saving_to = "%s.%.2f" % (saveto.replace(".npz",""), valid_err)
             numpy.savez(saving_to, history_errs=history_errs, **unzip(tparams))
 
-    # use the best nll parameters for final checkpoint (if they exist)
+    # use the best parameters for final checkpoint (if they exist)
     if best_p is not None:
         zipp(best_p, tparams)
 
