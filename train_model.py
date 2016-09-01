@@ -79,7 +79,7 @@ if __name__ == "__main__":
                 "ctx2out": True,
                 "learning-rate": 0.0001, # not used for adadelta
                 "optimizer": "adam",
-                "max_epochs": 5,
+                "max_epochs": 100,
                 "selector": True,
                 "use-dropout": True,
                 "use-dropout-lstm": False,
