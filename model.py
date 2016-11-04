@@ -7,7 +7,7 @@ International Conference for Machine Learning (2015)
 http://arxiv.org/abs/1502.03044
 
 Comments in square brackets [] indicate references to the equations/
-more detailed explanations in the above paper. 
+more detailed explanations in the above paper.
 '''
 import theano
 import theano.tensor as tensor
@@ -395,7 +395,7 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
     def _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_=None, dp_att_=None):
         """ Each variable is one time slice of the LSTM
         m_ - (mask), x_- (previous word), h_- (hidden state), c_- (lstm memory),
-        a_ - (alpha distribution [eq (5)]), as_- (sample from alpha dist), ct_- (context), 
+        a_ - (alpha distribution [eq (5)]), as_- (sample from alpha dist), ct_- (context),
         pctx_ (projected context), dp_/dp_att_ (dropout masks)
         """
         # attention computation
@@ -454,7 +454,7 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
         # compute the new memory/hidden state
         # if the mask is 0, just copy the previous state
         c = f * c_ + i * c
-        c = m_[:,None] * c + (1. - m_)[:,None] * c_ 
+        c = m_[:,None] * c + (1. - m_)[:,None] * c_
 
         h = o * tensor.tanh(c)
         h = m_[:,None] * h + (1. - m_)[:,None] * h_
@@ -535,13 +535,22 @@ def init_params(options):
     # embedding: [matrix E in paper]
     params['Wemb'] = norm_weight(options['n_words'], options['dim_word'])
     ctx_dim = options['ctx_dim']
+
     if options['lstm_encoder']: # potential feature that runs an LSTM over the annotation vectors
         # encoder: LSTM
         params = get_layer('lstm')[0](options, params, prefix='encoder',
                                       nin=options['ctx_dim'], dim=options['dim'])
         params = get_layer('lstm')[0](options, params, prefix='encoder_rev',
                                       nin=options['ctx_dim'], dim=options['dim'])
+
         ctx_dim = options['dim'] * 2
+    # TODO PRIOR attention parameters
+    if options['saliency']:
+        params = get_layer('ff')[0](options,
+                                    params, prefix='ff_sal',
+                                    nin=ctx_dim,
+                                    nout=1,
+                                    activ='sigmoid')
     # init_state, init_cell: [top right on page 4]
     print("init_state, init_cell")
     for lidx in xrange(1, options['n_layers_init']):
@@ -617,7 +626,28 @@ def build_model(tparams, options, sampling=True):
     x = tensor.matrix('x', dtype='int64')
     mask = tensor.matrix('mask', dtype='float32')
     # context: #samples x #annotations x dim
+    """
+    TODO: This is where to apply PRIOR salency
+    p_alpha = tensor.dot(ctx,
+                          tparams[_p(prefix,'P_att')])+tparams[_p(prefix,
+                                                              'p_tt')]
+    p_alpha_shp = p_alpha.shape
+    p_alpha = p_alpha.reshape([alpha_shp[0],alpha_shp[1]])
+    p_alpha = tensor.nnet.sigmoid(p_alpha)
+
+    l1_p_alpha  = L1  = tensor.sum(abs(p_alpha))
+    """
+
     ctx = tensor.tensor3('ctx', dtype='float32')
+    # TODO: if saliency is on apply params and multiply with weights
+    if options['saliency']:
+        p_alpha = get_layer('ff')[0](tparams, ctx,
+                                     prefix='ff_sal',
+                                     nin=options['ctx_dim'],
+                                     nout=1,
+                                     activ='sigmoid')
+        ctx = ctx * alpha[:, :, None]
+        l1_p_alpha = tensor.sum(abs(p_alpha))
 
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
@@ -638,8 +668,13 @@ def build_model(tparams, options, sampling=True):
         ctx0 = ctx
 
     # initial state/cell [top right on page 4]
-    ctx_mean = ctx0.mean(1)
-    for lidx in xrange(1, options['n_layers_init']):
+    # TODO: if saliency is on just sum the vectors (weighted sum)
+    if options['saliency']:
+        ctx_mean = ctx0.sum(1)
+    else:
+        ctx_mean = ctx0.mean(1)
+
+    for in xrange(1, options['n_layers_init']):
         ctx_mean = get_layer('ff')[1](tparams, ctx_mean, options,
                                       prefix='ff_init_%d'%lidx, activ='rectifier')
         if options['use_dropout']:
@@ -717,9 +752,11 @@ def build_model(tparams, options, sampling=True):
     cost = cost.reshape([x.shape[0], x.shape[1]])
     masked_cost = cost * mask
     cost = (masked_cost).sum(0)
+    if options['saliency']:
+        cost = cost + options['lamb'] * l1_p_alpha
 
     # optional outputs
-    opt_outs = dict() 
+    opt_outs = dict()
     if options['selector']:
         opt_outs['selector'] = sels
     if options['attn_type'] == 'stochastic':
@@ -845,7 +882,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
 def gen_sample(tparams, f_init, f_next, ctx0, options,
                trng=None, k=1, maxlen=30, stochastic=False):
     """Generate captions with beam search.
-    
+
     This function uses the beam search algorithm to conditionally
     generate candidate captions. Supports beamsearch and stochastic
     sampling.
@@ -856,7 +893,7 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
         dictionary of theano shared variables represented weight
         matricies
     f_init : theano function
-        input: annotation, output: initial lstm state and memory 
+        input: annotation, output: initial lstm state and memory
         (also performs transformation on ctx0 if using lstm_encoder)
     f_next: theano function
         takes the previous word/state/memory + ctx0 and runs one
@@ -872,12 +909,12 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
     maxlen : int
         maximum allowed caption size
     stochastic : bool
-        if True, sample stochastically 
+        if True, sample stochastically
 
     Returns
     -------
     sample : list of list
-        each sublist contains an (encoded) sample from the model 
+        each sublist contains an (encoded) sample from the model
     sample_score : numpy array
         scores of each sample
     """
@@ -910,7 +947,7 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
         next_memory.append(rval[1+options['n_layers_lstm']+lidx])
         next_memory[-1] = next_memory[-1].reshape([1, next_memory[-1].shape[0]])
     # reminder: if next_w = -1, the switch statement
-    # in build_sampler is triggered -> (empty word embeddings)  
+    # in build_sampler is triggered -> (empty word embeddings)
     next_w = -1 * numpy.ones((1,)).astype('int64')
 
     for ii in xrange(maxlen):
@@ -932,7 +969,7 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
             if next_w[0] == 0:
                 break
         else:
-            cand_scores = hyp_scores[:,None] - numpy.log(next_p) 
+            cand_scores = hyp_scores[:,None] - numpy.log(next_p)
             cand_flat = cand_scores.flatten()
             ranks_flat = cand_flat.argsort()[:(k-dead_k)] # (k-dead_k) numpy array of with min nll
 
@@ -955,7 +992,7 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
             # get the corresponding hypothesis and append the predicted word
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
                 new_hyp_samples.append(hyp_samples[ti]+[wi])
-                new_hyp_scores[idx] = copy.copy(costs[idx]) # copy in the cost of that hypothesis 
+                new_hyp_scores[idx] = copy.copy(costs[idx]) # copy in the cost of that hypothesis
                 for lidx in xrange(options['n_layers_lstm']):
                     new_hyp_states[lidx].append(copy.copy(next_state[lidx][ti]))
                 for lidx in xrange(options['n_layers_lstm']):
@@ -1180,7 +1217,10 @@ def train(dim_word=100,  # word vector dimensionality
           references='',
           use_metrics=False,
           metric="METEOR",
-          force_metrics=False):
+          force_metrics=False,
+          saliency=False,  # use prior attention/saliency model
+          lamb=0.5,  # Weight for l1 loss on saliency model alphas
+          ):
 
     # hyperparam dict
     model_options = locals().copy()
@@ -1383,7 +1423,7 @@ def train(dim_word=100,  # word vector dimensionality
                     valid_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, valid, kf_valid).mean()
                     print 'Epoch ', eidx, ' Update ', uidx,  ' Valid Cost ', valid_err
 
-                    # the model with the best validation long likelihood is saved 
+                    # the model with the best validation long likelihood is saved
                     # we save each set of parameters that reduced the cost with the
                     # validation cost at the end of the filename
                     if valid_err <= best_err:
@@ -1496,7 +1536,7 @@ def train(dim_word=100,  # word vector dimensionality
                 print('Saving model to %s' % saveto)
                 numpy.savez(saveto, history_errs=history_errs, **params)
                 best_metric = m_score
-        # the model with the best validation long likelihood is saved 
+        # the model with the best validation long likelihood is saved
         # we save each set of parameters that reduced the cost with the
         # validation cost at the end of the filename
         elif valid_err <= best_err:
