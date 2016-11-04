@@ -552,7 +552,7 @@ def init_params(options):
     if options['saliency']:
         params = get_layer('ff')[0](options,
                                     params, prefix='ff_sal',
-                                    nin=ctx_dim,
+                                    nin=options['ctx_dim'],
                                     nout=1)
     # init_state, init_cell: [top right on page 4]
     print("init_state, init_cell")
@@ -668,6 +668,7 @@ def build_model(tparams, options, sampling=True):
         ctx_rev = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2)[:,::-1,:],
                                        options, prefix='encoder_rev')[0][:,::-1,:].dimshuffle(1,0,2)
         ctx0 = tensor.concatenate((ctx_fwd, ctx_rev), axis=2)
+        print "LSTM ecnoder", ctx0
     else:
         ctx0 = ctx
 
@@ -1187,7 +1188,7 @@ def train(dim_word=100,  # word vector dimensionality
           n_layers_out=1,  # number of layers used to compute logit
           n_layers_lstm=1,  # number of lstm layers
           n_layers_init=1,  # number of layers to initialize LSTM at time 0
-          lstm_encoder=False,  # if True, run bidirectional LSTM on input units
+          lstm_encoder=True,  # if True, run bidirectional LSTM on input units
           prev2out=False,  # Feed previous word into logit
           ctx2out=False,  # Feed attention weighted ctx into logit
           alpha_entropy_c=0.002,  # hard attn param
