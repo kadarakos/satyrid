@@ -629,20 +629,17 @@ def build_model(tparams, options, sampling=True):
     x = tensor.matrix('x', dtype='int64')
     mask = tensor.matrix('mask', dtype='float32')
     # context: #samples x #annotations x dim
-    """
-    TODO: This is where to apply PRIOR salency
-    p_alpha = tensor.dot(ctx,
-                          tparams[_p(prefix,'P_att')])+tparams[_p(prefix,
-                                                              'p_tt')]
-    p_alpha_shp = p_alpha.shape
-    p_alpha = p_alpha.reshape([alpha_shp[0],alpha_shp[1]])
-    p_alpha = tensor.nnet.sigmoid(p_alpha)
-
-    l1_p_alpha  = L1  = tensor.sum(abs(p_alpha))
-    """
 
     ctx = tensor.tensor3('ctx', dtype='float32')
-    # TODO: if saliency is on apply params and multiply with weights
+
+    n_timesteps = x.shape[0]
+    n_samples = x.shape[1]
+
+    # index into the word embedding matrix, shift it forward in time
+    emb = tparams['Wemb'][x.flatten()].reshape([n_timesteps, n_samples, options['dim_word']])
+    emb_shifted = tensor.zeros_like(emb)
+    emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
+    emb = emb_shifted
     if options['saliency']:
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
                                      prefix='ff_sal', activ='sigmoid',
@@ -652,15 +649,9 @@ def build_model(tparams, options, sampling=True):
         p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
         ctx = ctx * p_alpha
         l1_p_alpha = tensor.sum(abs(p_alpha))
-    print ctx
-    n_timesteps = x.shape[0]
-    n_samples = x.shape[1]
-
-    # index into the word embedding matrix, shift it forward in time
-    emb = tparams['Wemb'][x.flatten()].reshape([n_timesteps, n_samples, options['dim_word']])
-    emb_shifted = tensor.zeros_like(emb)
-    emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
-    emb = emb_shifted
+        ctx.name = 'ctx'
+        ctx0 = ctx
+        print "Saliency ctx", ctx0
     if options['lstm_encoder']:
         # encoder
         ctx_fwd = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2),
@@ -669,9 +660,10 @@ def build_model(tparams, options, sampling=True):
                                        options, prefix='encoder_rev')[0][:,::-1,:].dimshuffle(1,0,2)
         ctx0 = tensor.concatenate((ctx_fwd, ctx_rev), axis=2)
         print "LSTM ecnoder", ctx0
-    else:
+    if not options['saliency'] and not options['lstm_encoder']:
+        print "nooooooooooooooooo"
         ctx0 = ctx
-
+    print ctx, ctx0
     # initial state/cell [top right on page 4]
     # TODO: if saliency is on just sum the vectors (weighted sum)
     if options['saliency']:
@@ -766,7 +758,7 @@ def build_model(tparams, options, sampling=True):
         opt_outs['selector'] = sels
     if options['attn_type'] == 'stochastic':
         opt_outs['masked_cost'] = masked_cost # need this for reinforce later
-        opt_outs['attn_updates'] = attn_updates # this is to update the rng
+        opt_outs['attn_Trueupdates'] = attn_updates # this is to update the rng
     print(ctx)
     return trng, use_noise, [x, mask, ctx], alphas, alpha_sample, cost, opt_outs
 
@@ -795,9 +787,22 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         ctx_rev = get_layer('lstm')[1](tparams, ctx[::-1,:],
                                        options, prefix='encoder_rev')[0][::-1,:]
         ctx = tensor.concatenate((ctx_fwd, ctx_rev), axis=1)
+    if options['saliency']:
+        p_alpha = get_layer('ff')[1](tparams, ctx, options,
+                                     prefix='ff_sal', activ='sigmoid',
+                                     nin=options['ctx_dim'],
+                                     nout=1)
+        p_alpha_shp = p_alpha.shape
+        p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
+        ctx = ctx * p_alpha
+        ctx.name = 'ctx_sampler'
 
     # initial state/cell
-    ctx_mean = ctx.mean(0)
+    if options['saliency']:
+        ctx_mean = ctx.sum(0)
+    else:
+        ctx_mean = ctx.mean(0)
+
     for lidx in xrange(1, options['n_layers_init']):
         ctx_mean = get_layer('ff')[1](tparams, ctx_mean, options,
                                       prefix='ff_init_%d'%lidx, activ='rectifier')
@@ -810,8 +815,11 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
             init_state.append(get_layer('ff')[1](tparams, ctx_mean, options, prefix='ff_state_%d'%lidx, activ='tanh'))
             init_memory.append(get_layer('ff')[1](tparams, ctx_mean, options, prefix='ff_memory_%d'%lidx, activ='tanh'))
 
-    print 'Building f_init...',
-    f_init = theano.function([ctx], [ctx]+init_state+init_memory, name='f_init', profile=False)
+    print 'Building f_init...', ctx
+    f_init = theano.function([ctx],
+                             [ctx]+init_state+init_memory,
+                             name='f_init',
+                             profile=False)
     print 'Done'
 
     # build f_next
@@ -1188,7 +1196,7 @@ def train(dim_word=100,  # word vector dimensionality
           n_layers_out=1,  # number of layers used to compute logit
           n_layers_lstm=1,  # number of lstm layers
           n_layers_init=1,  # number of layers to initialize LSTM at time 0
-          lstm_encoder=True,  # if True, run bidirectional LSTM on input units
+          lstm_encoder=False,  # if True, run bidirectional LSTM on input units
           prev2out=False,  # Feed previous word into logit
           ctx2out=False,  # Feed attention weighted ctx into logit
           alpha_entropy_c=0.002,  # hard attn param
@@ -1279,13 +1287,13 @@ def train(dim_word=100,  # word vector dimensionality
           opt_outs = \
           build_model(tparams, model_options)
 
-
     # To sample, we use beam search: 1) f_init is a function that initializes
     # the LSTM at time 0 [see top right of page 4], 2) f_next returns the distribution over
     # words and also the new "initial state/memory" see equation
     print 'Buliding sampler'
     f_init, f_next = build_sampler(tparams, model_options, use_noise, trng)
-
+    print inps
+    print f_init, f_next
     # we want the cost without any the regularizers
     f_log_probs = theano.function(inps, -cost, profile=False,
                                         updates=opt_outs['attn_updates']
