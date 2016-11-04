@@ -137,6 +137,9 @@ def norm_weight(nin,nout=None, scale=0.01, ortho=True):
     return W.astype('float32')
 
 # some useful shorthands
+def sigmoid(x):
+    return tensor.nnet.nnet.sigmoid(x)
+
 def tanh(x):
     return tensor.tanh(x)
 
@@ -145,6 +148,7 @@ def rectifier(x):
 
 def linear(x):
     return x
+
 
 """
 Neural network layer definitions.
@@ -549,8 +553,7 @@ def init_params(options):
         params = get_layer('ff')[0](options,
                                     params, prefix='ff_sal',
                                     nin=ctx_dim,
-                                    nout=1,
-                                    activ='sigmoid')
+                                    nout=1)
     # init_state, init_cell: [top right on page 4]
     print("init_state, init_cell")
     for lidx in xrange(1, options['n_layers_init']):
@@ -641,14 +644,15 @@ def build_model(tparams, options, sampling=True):
     ctx = tensor.tensor3('ctx', dtype='float32')
     # TODO: if saliency is on apply params and multiply with weights
     if options['saliency']:
-        p_alpha = get_layer('ff')[0](tparams, ctx,
-                                     prefix='ff_sal',
+        p_alpha = get_layer('ff')[1](tparams, ctx, options,
+                                     prefix='ff_sal', activ='sigmoid',
                                      nin=options['ctx_dim'],
-                                     nout=1,
-                                     activ='sigmoid')
-        ctx = ctx * alpha[:, :, None]
+                                     nout=1)
+        p_alpha_shp = p_alpha.shape
+        p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
+        ctx = ctx * p_alpha
         l1_p_alpha = tensor.sum(abs(p_alpha))
-
+    print ctx
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
 
@@ -674,7 +678,7 @@ def build_model(tparams, options, sampling=True):
     else:
         ctx_mean = ctx0.mean(1)
 
-    for in xrange(1, options['n_layers_init']):
+    for lidx in xrange(1, options['n_layers_init']):
         ctx_mean = get_layer('ff')[1](tparams, ctx_mean, options,
                                       prefix='ff_init_%d'%lidx, activ='rectifier')
         if options['use_dropout']:
@@ -762,7 +766,7 @@ def build_model(tparams, options, sampling=True):
     if options['attn_type'] == 'stochastic':
         opt_outs['masked_cost'] = masked_cost # need this for reinforce later
         opt_outs['attn_updates'] = attn_updates # this is to update the rng
-
+    print(ctx)
     return trng, use_noise, [x, mask, ctx], alphas, alpha_sample, cost, opt_outs
 
 # build a sampler
@@ -1202,12 +1206,12 @@ def train(dim_word=100,  # word vector dimensionality
           optimizer='rmsprop',
           batch_size = 16,
           valid_batch_size = 16,
-          saveto='model.npz',  # relative path of saved model file
+          saveto='sal_model.npz',  # relative path of saved model file
           validFreq=1000,
           saveFreq=1000,  # save the parameters after every saveFreq updates
           sampleFreq=100,  # generate some samples after every sampleFreq updates
-          dataset='flickr8k',
-          dictionary=None,  # word dictionary
+          dataset='flickr30k',
+          dictionary='data/dictionary.pkl',  # word dictionary
           use_dropout=False,  # setting this true turns on dropout at various points
           use_dropout_lstm=False,  # dropout on lstm gates
           reload_=False,
@@ -1218,7 +1222,7 @@ def train(dim_word=100,  # word vector dimensionality
           use_metrics=False,
           metric="METEOR",
           force_metrics=False,
-          saliency=False,  # use prior attention/saliency model
+          saliency=True,  # use prior attention/saliency model
           lamb=0.5,  # Weight for l1 loss on saliency model alphas
           ):
 
