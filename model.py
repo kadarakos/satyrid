@@ -12,7 +12,9 @@ more detailed explanations in the above paper.
 import theano
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+import logging
 
+import numpy as np
 import cPickle as pkl
 import numpy
 import copy
@@ -39,6 +41,8 @@ import coco
 
 # monitor training performance using external metrics
 import metrics
+
+logger = logging.getLogger(__name__)
 
 # datasets: 'name', 'load_data: returns iterator', 'prepare_data: some preprocessing'
 datasets = {'flickr8k': (flickr8k.load_data, flickr8k.prepare_data),
@@ -627,19 +631,22 @@ def build_model(tparams, options, sampling=True):
 
     # description string: #words x #samples,
     x = tensor.matrix('x', dtype='int64')
+    x.tag.test_value =  np.random.randint(10, size=(10, 2)).astype("int64")
     mask = tensor.matrix('mask', dtype='float32')
     # context: #samples x #annotations x dim
 
     ctx = tensor.tensor3('ctx', dtype='float32')
+    ctx.tag.test_value = np.random.random(size=(2, 3, options['ctx_dim'])).astype("float32")
 
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
-
+    print "AFTER TIMESTES"
     # index into the word embedding matrix, shift it forward in time
     emb = tparams['Wemb'][x.flatten()].reshape([n_timesteps, n_samples, options['dim_word']])
     emb_shifted = tensor.zeros_like(emb)
     emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
     emb = emb_shifted
+    print "EMB DONE"
 
     if options['lstm_encoder']:
         # encoder
@@ -650,16 +657,19 @@ def build_model(tparams, options, sampling=True):
         ctx0 = tensor.concatenate((ctx_fwd, ctx_rev), axis=2)
         print "LSTM ecnoder", ctx0
     if options['saliency']:
+        print(ctx.tag.test_value)
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
                                      prefix='ff_saliency', activ='sigmoid',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
         p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
-        ctx = ctx * p_alpha
+        ctx = ctx * p_alpha[:, :, None]
         l1_p_alpha = tensor.sum(abs(p_alpha))
         ctx.name = 'ctx'
         ctx0 = ctx
+        print('\n', ctx.tag.test_value)
+
         print "Saliency ctx", ctx0
 
     if not options['saliency'] and not options['lstm_encoder']:
@@ -763,6 +773,8 @@ def build_model(tparams, options, sampling=True):
         opt_outs['masked_cost'] = masked_cost # need this for reinforce later
         opt_outs['attn_Trueupdates'] = attn_updates # this is to update the rng
     print(ctx)
+    print(ctx.tag.test_value)
+
     return trng, use_noise, [x, mask, ctx], alphas, alpha_sample, cost, opt_outs
 
 # build a sampler
@@ -783,6 +795,8 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
     print "Starting to build sampler ..."
     # context: #annotations x dim
     ctx = tensor.matrix('ctx_sampler', dtype='float32')
+    ctx.tag.test_value = np.random.random(size=(3, options['ctx_dim'])).astype("float32")
+    print(ctx.tag.test_value)
     if options['lstm_encoder']:
         # encoder
         ctx_fwd = get_layer('lstm')[1](tparams, ctx,
@@ -790,16 +804,26 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         ctx_rev = get_layer('lstm')[1](tparams, ctx[::-1,:],
                                        options, prefix='encoder_rev')[0][::-1,:]
         ctx = tensor.concatenate((ctx_fwd, ctx_rev), axis=1)
+
     if options['saliency']:
+        # TODO: this is where it breaks can't run p_alpha.eval()
+        print "CTX", ctx
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
                                      prefix='ff_saliency', activ='sigmoid',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
-        p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
+        print(p_alpha_shp.tag.test_value)
+
+
+        print(ctx.tag.test_value.shape)
+        print(p_alpha.tag.test_value.shape)
+        p_alpha = tensor.addbroadcast(p_alpha, 1)
         ctx = ctx * p_alpha
         ctx.name = 'ctx'
-
+    print "Sampler test value"
+    print(ctx.tag.test_value)
+    # sys.text
     # initial state/cell
     if options['saliency']:
         ctx_mean = ctx.sum(0)
