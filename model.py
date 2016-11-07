@@ -551,7 +551,7 @@ def init_params(options):
     # TODO PRIOR attention parameters
     if options['saliency']:
         params = get_layer('ff')[0](options,
-                                    params, prefix='ff_sal',
+                                    params, prefix='ff_saliency',
                                     nin=options['ctx_dim'],
                                     nout=1)
     # init_state, init_cell: [top right on page 4]
@@ -640,6 +640,15 @@ def build_model(tparams, options, sampling=True):
     emb_shifted = tensor.zeros_like(emb)
     emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
     emb = emb_shifted
+
+    if options['lstm_encoder']:
+        # encoder
+        ctx_fwd = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2),
+                                       options, prefix='encoder')[0].dimshuffle(1,0,2)
+        ctx_rev = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2)[:,::-1,:],
+                                       options, prefix='encoder_rev')[0][:,::-1,:].dimshuffle(1,0,2)
+        ctx0 = tensor.concatenate((ctx_fwd, ctx_rev), axis=2)
+        print "LSTM ecnoder", ctx0
     if options['saliency']:
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
                                      prefix='ff_sal', activ='sigmoid',
@@ -652,14 +661,7 @@ def build_model(tparams, options, sampling=True):
         ctx.name = 'ctx'
         ctx0 = ctx
         print "Saliency ctx", ctx0
-    if options['lstm_encoder']:
-        # encoder
-        ctx_fwd = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2),
-                                       options, prefix='encoder')[0].dimshuffle(1,0,2)
-        ctx_rev = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2)[:,::-1,:],
-                                       options, prefix='encoder_rev')[0][:,::-1,:].dimshuffle(1,0,2)
-        ctx0 = tensor.concatenate((ctx_fwd, ctx_rev), axis=2)
-        print "LSTM ecnoder", ctx0
+
     if not options['saliency'] and not options['lstm_encoder']:
         print "nooooooooooooooooo"
         ctx0 = ctx
@@ -789,7 +791,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         ctx = tensor.concatenate((ctx_fwd, ctx_rev), axis=1)
     if options['saliency']:
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
-                                     prefix='ff_sal', activ='sigmoid',
+                                     prefix='ff_saliency', activ='sigmoid',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
