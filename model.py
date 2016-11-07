@@ -651,7 +651,7 @@ def build_model(tparams, options, sampling=True):
         print "LSTM ecnoder", ctx0
     if options['saliency']:
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
-                                     prefix='ff_sal', activ='sigmoid',
+                                     prefix='ff_saliency', activ='sigmoid',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
@@ -683,6 +683,7 @@ def build_model(tparams, options, sampling=True):
     init_memory = get_layer('ff')[1](tparams, ctx_mean, options, prefix='ff_memory', activ='tanh')
     # lstm decoder
     # [equation (1), (2), (3) in section 3.1.2]
+    print "BEFORE DECODER", ctx0
     attn_updates = []
     proj, updates = get_layer('lstm_cond')[1](tparams, emb, options,
                                               prefix='decoder',
@@ -797,7 +798,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         p_alpha_shp = p_alpha.shape
         p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
         ctx = ctx * p_alpha
-        ctx.name = 'ctx_sampler'
+        ctx.name = 'ctx'
 
     # initial state/cell
     if options['saliency']:
@@ -837,7 +838,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
     # for the first word (which is coded with -1), emb should be all zero
     emb = tensor.switch(x[:,None] < 0, tensor.alloc(0., 1, tparams['Wemb'].shape[1]),
                         tparams['Wemb'][x])
-
+    print "BEFORE decoder 2", ctx
     proj = get_layer('lstm_cond')[1](tparams, emb, options,
                                      prefix='decoder',
                                      mask=None, context=ctx,
