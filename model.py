@@ -12,7 +12,6 @@ more detailed explanations in the above paper.
 import theano
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-import logging
 
 import numpy as np
 import cPickle as pkl
@@ -42,7 +41,6 @@ import coco
 # monitor training performance using external metrics
 import metrics
 
-logger = logging.getLogger(__name__)
 
 # datasets: 'name', 'load_data: returns iterator', 'prepare_data: some preprocessing'
 datasets = {'flickr8k': (flickr8k.load_data, flickr8k.prepare_data),
@@ -631,12 +629,11 @@ def build_model(tparams, options, sampling=True):
 
     # description string: #words x #samples,
     x = tensor.matrix('x', dtype='int64')
-    x.tag.test_value =  np.random.randint(10, size=(10, 2)).astype("int64")
+    # x.tag.test_value =  np.random.randint(10, size=(10, 2)).astype("int64")
     mask = tensor.matrix('mask', dtype='float32')
     # context: #samples x #annotations x dim
-
     ctx = tensor.tensor3('ctx', dtype='float32')
-    ctx.tag.test_value = np.random.random(size=(2, 3, options['ctx_dim'])).astype("float32")
+    # ctx.tag.test_value = np.random.random(size=(2, 3, options['ctx_dim'])).astype("float32")
 
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
@@ -647,7 +644,6 @@ def build_model(tparams, options, sampling=True):
     emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
     emb = emb_shifted
     print "EMB DONE"
-
     if options['lstm_encoder']:
         # encoder
         ctx_fwd = get_layer('lstm')[1](tparams, ctx.dimshuffle(1,0,2),
@@ -656,19 +652,18 @@ def build_model(tparams, options, sampling=True):
                                        options, prefix='encoder_rev')[0][:,::-1,:].dimshuffle(1,0,2)
         ctx0 = tensor.concatenate((ctx_fwd, ctx_rev), axis=2)
         print "LSTM ecnoder", ctx0
+
     if options['saliency']:
-        print(ctx.tag.test_value)
+        # print(ctx.tag.test_value)
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
                                      prefix='ff_saliency', activ='sigmoid',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
         p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
-        ctx = ctx * p_alpha[:, :, None]
+        ctx0 = ctx * p_alpha[:, :, None]
         l1_p_alpha = tensor.sum(abs(p_alpha))
-        ctx.name = 'ctx'
-        ctx0 = ctx
-        print('\n', ctx.tag.test_value)
+        # print('\n', ctx.tag.test_value)
 
         print "Saliency ctx", ctx0
 
@@ -680,6 +675,7 @@ def build_model(tparams, options, sampling=True):
     # TODO: if saliency is on just sum the vectors (weighted sum)
     if options['saliency']:
         ctx_mean = ctx0.sum(1)
+        # print "ctx_mean", ctx_mean.tag.test_value, '\n'
     else:
         ctx_mean = ctx0.mean(1)
 
@@ -773,9 +769,13 @@ def build_model(tparams, options, sampling=True):
         opt_outs['masked_cost'] = masked_cost # need this for reinforce later
         opt_outs['attn_Trueupdates'] = attn_updates # this is to update the rng
     print(ctx)
-    print(ctx.tag.test_value)
+    # print(ctx.tag.test_value)
+    if options['saliency']:
+        pack = [x, mask, ctx, p_alpha]
+    else:
+        pack = [x, mask, ctx]
 
-    return trng, use_noise, [x, mask, ctx], alphas, alpha_sample, cost, opt_outs
+    return trng, use_noise, pack, alphas, alpha_sample, cost, opt_outs
 
 # build a sampler
 def build_sampler(tparams, options, use_noise, trng, sampling=True):
@@ -795,8 +795,8 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
     print "Starting to build sampler ..."
     # context: #annotations x dim
     ctx = tensor.matrix('ctx_sampler', dtype='float32')
-    ctx.tag.test_value = np.random.random(size=(3, options['ctx_dim'])).astype("float32")
-    print(ctx.tag.test_value)
+    # ctx.tag.test_value = np.random.random(size=(3, options['ctx_dim'])).astype("float32")
+    # print(ctx.tag.test_value)
     if options['lstm_encoder']:
         # encoder
         ctx_fwd = get_layer('lstm')[1](tparams, ctx,
@@ -813,16 +813,16 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
-        print(p_alpha_shp.tag.test_value)
+        # print(p_alpha_shp.tag.test_value)
 
 
-        print(ctx.tag.test_value.shape)
-        print(p_alpha.tag.test_value.shape)
+        # print(ctx.tag.test_value.shape)
+        # print(p_alpha.tag.test_value.shape)
         p_alpha = tensor.addbroadcast(p_alpha, 1)
         ctx = ctx * p_alpha
         ctx.name = 'ctx'
     print "Sampler test value"
-    print(ctx.tag.test_value)
+    # print(ctx.tag.test_value)
     # sys.text
     # initial state/cell
     if options['saliency']:
@@ -851,7 +851,10 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
 
     # build f_next
     ctx = tensor.matrix('ctx_sampler', dtype='float32')
+    # ctx.tag.test_value = np.random.random(size=(3, options['ctx_dim'])).astype("float32")
     x = tensor.vector('x_sampler', dtype='int64')
+    # x.tag.test_value =  np.random.randint(10, size=(5,)).astype("int64")
+
     init_state = [tensor.matrix('init_state', dtype='float32')]
     init_memory = [tensor.matrix('init_memory', dtype='float32')]
     if options['n_layers_lstm'] > 1:
@@ -863,6 +866,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
     emb = tensor.switch(x[:,None] < 0, tensor.alloc(0., 1, tparams['Wemb'].shape[1]),
                         tparams['Wemb'][x])
     print "BEFORE decoder 2", ctx
+    # print ctx.tag.test_value, '\n'
     proj = get_layer('lstm_cond')[1](tparams, emb, options,
                                      prefix='decoder',
                                      mask=None, context=ctx,
@@ -1217,7 +1221,7 @@ def generate_outputs(split, saveto, use_noise, tparams, f_init, f_next,
 """
 def train(dim_word=100,  # word vector dimensionality
           ctx_dim=512,  # context vector dimensionality
-          dim=1000,  # the number of LSTM units
+          dim=1300,  # the number of LSTM units
           attn_type='stochastic',  # [see section 4 from paper]
           n_layers_att=1,  # number of layers used to compute the attention weights
           n_layers_out=1,  # number of layers used to compute logit
@@ -1231,34 +1235,34 @@ def train(dim_word=100,  # word vector dimensionality
           semi_sampling_p=0.5,  # hard attn param
           temperature=1.,  # hard attn param
           patience=10,
-          max_epochs=5000,
-          dispFreq=100,
+          max_epochs=50,
+          dispFreq=1,
           decay_c=0.,  # weight decay coeff
           alpha_c=0.,  # doubly stochastic coeff
           lrate=0.01,  # used only for SGD
           selector=False,  # selector (see paper)
           n_words=10000,  # vocab size
           maxlen=100,  # maximum length of the description
-          optimizer='rmsprop',
-          batch_size = 16,
-          valid_batch_size = 16,
+          optimizer='adam',
+          batch_size=64,
+          valid_batch_size=64,
           saveto='sal_model.npz',  # relative path of saved model file
           validFreq=1000,
           saveFreq=1000,  # save the parameters after every saveFreq updates
-          sampleFreq=100,  # generate some samples after every sampleFreq updates
+          sampleFreq=1000,  # generate some samples after every sampleFreq updates
           dataset='flickr30k',
           dictionary='data/dictionary.pkl',  # word dictionary
           use_dropout=False,  # setting this true turns on dropout at various points
           use_dropout_lstm=False,  # dropout on lstm gates
           reload_=False,
           save_per_epoch=False, # this saves down the model every epoch
-          clipnorm=0.,
+          clipnorm=4.,
           clipvalue=0.,
           references='',
-          use_metrics=False,
-          metric="METEOR",
-          force_metrics=False,
-          saliency=True,  # use prior attention/saliency model
+          use_metrics=True,
+          metric='Bleu_4',
+          force_metrics=True,
+          saliency=False,  # use prior attention/saliency model
           lamb=0.5,  # Weight for l1 loss on saliency model alphas
           ):
 
@@ -1313,6 +1317,9 @@ def train(dim_word=100,  # word vector dimensionality
           cost, \
           opt_outs = \
           build_model(tparams, model_options)
+    if model_options['saliency']:
+        inps = inps[:-1]
+        p_alpha = inps[-1]
 
     # To sample, we use beam search: 1) f_init is a function that initializes
     # the LSTM at time 0 [see top right of page 4], 2) f_next returns the distribution over
@@ -1321,6 +1328,7 @@ def train(dim_word=100,  # word vector dimensionality
     f_init, f_next = build_sampler(tparams, model_options, use_noise, trng)
     print inps
     print f_init, f_next
+    # print inps[2].tag.test_value
     # we want the cost without any the regularizers
     f_log_probs = theano.function(inps, -cost, profile=False,
                                         updates=opt_outs['attn_updates']
@@ -1439,7 +1447,6 @@ def train(dim_word=100,  # word vector dimensionality
             if x is None:
                 print 'Minibatch with zero sample under length ', maxlen
                 continue
-
             # get the cost for the minibatch, and update the weights
             ud_start = time.time()
             cost = f_grad_shared(x, mask, ctx)
@@ -1453,6 +1460,7 @@ def train(dim_word=100,  # word vector dimensionality
 
             if numpy.mod(uidx, dispFreq) == 0:
                 print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
+ 	    print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
 
             # Check validation loss and compute metrics if forced
             if numpy.mod(uidx, validFreq) == 0:
@@ -1463,7 +1471,7 @@ def train(dim_word=100,  # word vector dimensionality
                     valid_err = -pred_probs(f_log_probs, model_options, worddict, prepare_data, valid, kf_valid).mean()
                     print 'Epoch ', eidx, ' Update ', uidx,  ' Valid Cost ', valid_err
 
-                    # the model with the best validation long likelihood is saved
+                    # the model with the best validation log likelihood is saved
                     # we save each set of parameters that reduced the cost with the
                     # validation cost at the end of the filename
                     if valid_err <= best_err:

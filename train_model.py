@@ -59,14 +59,14 @@ def main(params):
 if __name__ == "__main__":
     # "attn-type": "stochastic" == hard attention
     # "attn-type": "deterministic: == soft attention
-    defaults = {"model": "flickr30k-soft_attn-w512-h1000.npz",
+    defaults = {"model": "flickr30k-soft_attn-w512-h1300-nosal.npz",
                 "dataset": "flickr30k", # dataset module
                 "references": "ref/30k/dev/",
                 #"attn-type": "stochastic", # hard attention
                 "attn-type": "deterministic", # soft attention
                 "dim-word": 512,
                 "ctx-dim": 512,
-                "dim": 1000,
+                "dim": 1300,
                 "n-words": 10000,
                 "n-layers-att": 2,
                 "n-layers-out": 1,
@@ -79,24 +79,26 @@ if __name__ == "__main__":
                 "ctx2out": True,
                 "learning-rate": 0.0001, # not used for adadelta
                 "optimizer": "adam",
-                "max_epochs": 100,
+                "max_epochs": 50,
                 "selector": True,
                 "use-dropout": True,
                 "use-dropout-lstm": False,
                 "save-per-epoch": False,
                 "reload": False,
-                "dispFreq": 5000, # updates between showing 5 samples from the model
-                "validFreq": 500, # updates between validation data loss check
-                "sampleFreq": 5000,
+                "dispFreq": 1, # updates between showing 5 samples from the model
+                "validFreq": 1000, # updates between validation data loss check
+                "sampleFreq": 1000,
                 "batch_size": 64,
                 "clipnorm": 4., # value to clip the norm of the gradients
                 "clipvalue": 0., # value to clip the value of the updates
-                "use_metrics": False, # measure training progress using metrics
+                "use_metrics": True, # measure training progress using metrics
                 "metric": "Bleu_4", # METEOR, Bleu_{1,2,3,4}, ROUGE_L, CIDEr
                 # By default, metrics are computed at the end of each epoch.
                 # Do you want to also compute metrics when val loss decreases?
                 # This will substantially increase training time!
-                "force_metrics": False
+                "force_metrics": True,
+		"saliency": False,
+		"lamb": 0.06
                 }
     # get updates from command line
     args = parser.parse_args()
