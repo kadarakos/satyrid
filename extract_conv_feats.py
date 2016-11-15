@@ -63,25 +63,28 @@ class CNN(object):
             batch_count += 1
         return all_feats
 
-    def crop_image(self, image_path, target_height=224, target_width=224):
+
+def crop_image(self, image_path, target_height=224, target_width=224):
+        """Reshape image shorter and crop, keep aspect ratio."""
         image = skimage.img_as_float(skimage.io.imread(image_path)).astype(np.float32)
 
         if len(image.shape) == 2:
-            # handle black & white images
-            image = np.tile(image[:,:,np.newaxis], (1,1,3))
+            image = np.tile(image[:, :, np.newaxis], (1, 1, 3))
         height, width, rgb = image.shape
 
         if width == height:
-            resized_image = skimage.transform.resize(image, (target_height,target_width))
+            resized_image = skimage.transform.resize(image,
+                                                     (target_height,
+                                                      target_width))
 
         elif height < width:
-            resized_image = skimage.transform.resize(image, (int(width * float(target_height)/height), target_width))
-            cropping_length = int((resized_image.shape[1] - target_height) / 2)
-            resized_image = resized_image[:,cropping_length:resized_image.shape[1] - cropping_length]
+            resized_image = skimage.transform.resize(image, (target_width, int(width * float(target_height)/height)))
+            cropping_length = int((resized_image.shape[1] - target_width) / 2)
+            resized_image = resized_image[:, cropping_length:cropping_length+target_width]
+            return resized_image
 
         else:
-            resized_image = skimage.transform.resize(image, (target_height, int(height * float(target_width) / width)))
-            cropping_length = int((resized_image.shape[0] - target_width) / 2)
-            resized_image = resized_image[cropping_length:resized_image.shape[0] - cropping_length,:]
-
-        return skimage.transform.resize(resized_image, (target_height, target_width))
+            resized_image = skimage.transform.resize(image, (int(height * float(target_width) / width), target_height))
+            cropping_length = int((resized_image.shape[0] - target_height) / 2)
+            resized_image = resized_image[cropping_length:cropping_length+target_height, :]
+        return resized_image
