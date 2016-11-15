@@ -76,15 +76,15 @@ def crop_image(self, image_path, target_height=224, target_width=224):
             resized_image = skimage.transform.resize(image,
                                                      (target_height,
                                                       target_width))
-
         elif height < width:
-            resized_image = skimage.transform.resize(image, (target_width, int(width * float(target_height)/height)))
-            cropping_length = int((resized_image.shape[1] - target_width) / 2)
-            resized_image = resized_image[:, cropping_length:cropping_length+target_width]
-            return resized_image
+            w = int(width * float(target_height)/height)
+            resized_image = skimage.transform.resize(image, (target_height, w))
+            crop_length = int((w - target_width) / 2)
+            resized_image = resized_image[:, crop_length:crop_length+target_width]
 
         else:
-            resized_image = skimage.transform.resize(image, (int(height * float(target_width) / width), target_height))
-            cropping_length = int((resized_image.shape[0] - target_height) / 2)
-            resized_image = resized_image[cropping_length:cropping_length+target_height, :]
+            h = int(height * float(target_width) / width)
+            resized_image = skimage.transform.resize(image, (h, target_width))
+            crop_length = int((h - target_height) / 2)
+            resized_image = resized_image[crop_length:crop_length+target_height, :]
         return resized_image
