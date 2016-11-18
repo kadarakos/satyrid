@@ -1,4 +1,4 @@
-'''
+""'''
 Source code for an attention based image caption generation system described
 in:
 
@@ -336,6 +336,14 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond', nin=None, dim=None
         b_sel = numpy.float32(0.)
         params[_p(prefix, 'b_sel')] = b_sel
 
+    if options['sal_selector']:
+        # selector between saliency or context alphas
+        print "attention: selector"
+        W_sal_sel = norm_weight(dim, 1)
+        params[_p(prefix, 'W_sal_sel')] = W_sal_sel
+        b_sal_sel = numpy.float32(0.)
+        params[_p(prefix, 'b_sal_sel')] = b_sal_sel
+
     return params
 
 def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
@@ -398,7 +406,8 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
             return _x[:, :, n*dim:(n+1)*dim]
         return _x[:, n*dim:(n+1)*dim]
 
-    def _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_=None, dp_att_=None):
+    def _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_=None, dp_att_=None,
+              p_alphas=None):
         """ Each variable is one time slice of the LSTM
         m_ - (mask), x_- (previous word), h_- (hidden state), c_- (lstm memory),
         a_ - (alpha distribution [eq (5)]), as_- (sample from alpha dist), ct_- (context),
@@ -418,7 +427,15 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
 
         if options['attn_type'] == 'deterministic':
             alpha = tensor.nnet.softmax(alpha.reshape([alpha_shp[0],alpha_shp[1]])) # softmax
-            ctx_ = (context * alpha[:,:,None]).sum(1) # current context
+	    if options['sal_selector']:
+            # Mix prior region saliency probabilities with alphas
+            	sal_sel_ = tensor.nnet.sigmoid(tensor.dot(h_,
+                                           tparams[_p(prefix, 'W_sal_sel')])+tparams[_p(prefix,'b_sal_sel')])
+            	sal_sel_ = sel_.reshape([sel_.shape[0]])
+            	alpha = sal_sel_[:, None] * alpha + (1 - sal_sel_[:, None]) * p_alpha
+            	alpha_pre = alpha
+            	alpha_shp = alpha.shape
+	    ctx_ = (context * alpha[:,:,None]).sum(1) # current context
             alpha_sample = alpha # you can return something else reasonable here to debug
         else:
             alpha = tensor.nnet.softmax(temperature_c*alpha.reshape([alpha_shp[0],alpha_shp[1]])) # softmax
@@ -550,10 +567,15 @@ def init_params(options):
                                       nin=options['ctx_dim'], dim=options['dim'])
 
         ctx_dim = options['dim'] * 2
-    # TODO PRIOR attention parameters
+
     if options['saliency']:
+        # Two layer salency model
         params = get_layer('ff')[0](options,
-                                    params, prefix='ff_saliency',
+                                    params, prefix='ff_saliency1',
+                                    nin=options['ctx_dim'],
+                                    nout=100)
+        params = get_layer('ff')[0](options,
+                                    params, prefix='ff_saliency2',
                                     nin=options['ctx_dim'],
                                     nout=1)
     # init_state, init_cell: [top right on page 4]
@@ -656,25 +678,31 @@ def build_model(tparams, options, sampling=True):
     if options['saliency']:
         # print(ctx.tag.test_value)
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
-                                     prefix='ff_saliency', activ='sigmoid',
+                                     prefix='ff_saliency1', activ='rectifier',
+                                     nin=options['ctx_dim'],
+                                     nout=100)
+        p_alpha = get_layer('ff')[1](tparams, ctx, options,
+                                     prefix='ff_saliency2', activ='linear',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
         p_alpha = p_alpha.reshape([p_alpha_shp[0], p_alpha_shp[1]])
-        ctx0 = ctx * p_alpha[:, :, None]
+        p_alpha = tensor.nnet.softmax(p_alpha / options['temp_sal'])
+        ctx_init = ctx * p_alpha[:, :, None]
         l1_p_alpha = tensor.sum(abs(p_alpha))
+        ctx0 = ctx
         # print('\n', ctx.tag.test_value)
 
-        print "Saliency ctx", ctx0
+        # print "Saliency ctx", ctx0
 
     if not options['saliency'] and not options['lstm_encoder']:
         print "nooooooooooooooooo"
         ctx0 = ctx
-    print ctx, ctx0
+    # print ctx, ctx0
     # initial state/cell [top right on page 4]
     # TODO: if saliency is on just sum the vectors (weighted sum)
     if options['saliency']:
-        ctx_mean = ctx0.sum(1)
+        ctx_mean = ctx_init.sum(1)
         # print "ctx_mean", ctx_mean.tag.test_value, '\n'
     else:
         ctx_mean = ctx0.mean(1)
@@ -759,7 +787,7 @@ def build_model(tparams, options, sampling=True):
     masked_cost = cost * mask
     cost = (masked_cost).sum(0)
     if options['saliency']:
-        cost = cost + options['lamb'] * l1_p_alpha
+        cost = cost + (options['lamb'] * l1_p_alpha)
 
     # optional outputs
     opt_outs = dict()
@@ -806,27 +834,26 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         ctx = tensor.concatenate((ctx_fwd, ctx_rev), axis=1)
 
     if options['saliency']:
-        # TODO: this is where it breaks can't run p_alpha.eval()
         print "CTX", ctx
         p_alpha = get_layer('ff')[1](tparams, ctx, options,
-                                     prefix='ff_saliency', activ='sigmoid',
+                                     prefix='ff_saliency1', activ='rectifier',
+                                     nin=options['ctx_dim'],
+                                     nout=100)
+        p_alpha = get_layer('ff')[1](tparams, ctx, options,
+                                     prefix='ff_saliency2', activ='rectifier',
                                      nin=options['ctx_dim'],
                                      nout=1)
         p_alpha_shp = p_alpha.shape
-        # print(p_alpha_shp.tag.test_value)
-
-
-        # print(ctx.tag.test_value.shape)
-        # print(p_alpha.tag.test_value.shape)
         p_alpha = tensor.addbroadcast(p_alpha, 1)
-        ctx = ctx * p_alpha
+        p_alpha = tensor.nnet.softmax(p_alpha / options['temp_sal'])
+        ctx_init = ctx * p_alpha
         ctx.name = 'ctx'
     print "Sampler test value"
     # print(ctx.tag.test_value)
     # sys.text
     # initial state/cell
     if options['saliency']:
-        ctx_mean = ctx.sum(0)
+        ctx_mean = ctx_init.sum(0)
     else:
         ctx_mean = ctx.mean(0)
 
@@ -1234,8 +1261,8 @@ def train(dim_word=100,  # word vector dimensionality
           RL_sumCost=True,  # hard attn param
           semi_sampling_p=0.5,  # hard attn param
           temperature=1.,  # hard attn param
-          patience=10,
-          max_epochs=50,
+          patience=5,
+          max_epochs=15,
           dispFreq=1,
           decay_c=0.,  # weight decay coeff
           alpha_c=0.,  # doubly stochastic coeff
@@ -1243,9 +1270,9 @@ def train(dim_word=100,  # word vector dimensionality
           selector=False,  # selector (see paper)
           n_words=10000,  # vocab size
           maxlen=100,  # maximum length of the description
-          optimizer='adam',
-          batch_size=64,
-          valid_batch_size=64,
+          optimizer='rmsprop',
+          batch_size=40,
+          valid_batch_size=40,
           saveto='sal_model.npz',  # relative path of saved model file
           validFreq=1000,
           saveFreq=1000,  # save the parameters after every saveFreq updates
@@ -1262,8 +1289,9 @@ def train(dim_word=100,  # word vector dimensionality
           use_metrics=True,
           metric='Bleu_4',
           force_metrics=True,
-          saliency=False,  # use prior attention/saliency model
-          lamb=0.5,  # Weight for l1 loss on saliency model alphas
+          saliency=True,  # use prior attention/saliency model
+          lamb=0.0,  # Weight for l1 loss on saliency model alphas
+          temp_sal=3.0,  # Temperature for the saliency softmax
           ):
 
     # hyperparam dict
@@ -1287,6 +1315,7 @@ def train(dim_word=100,  # word vector dimensionality
     print 'Loading data'
     load_data, prepare_data = get_dataset(dataset)
     train, valid, test, worddict = load_data()
+
 
     # index 0 and 1 always code for the end of sentence and unknown token
     word_idict = dict()
@@ -1393,7 +1422,6 @@ def train(dim_word=100,  # word vector dimensionality
 
     # [See note in section 4.3 of paper]
     train_iter = HomogeneousData(train, batch_size=batch_size, maxlen=maxlen)
-
     if valid:
         kf_valid = KFold(len(valid[0]), n_folds=len(valid[0])/valid_batch_size, shuffle=False)
     if test:
@@ -1423,6 +1451,8 @@ def train(dim_word=100,  # word vector dimensionality
     estop = False
     best_err = numpy.inf
     best_metric = 0
+    print "Training parameters:"
+    print tparams
     for eidx in xrange(max_epochs):
         n_samples = 0
 
@@ -1460,7 +1490,10 @@ def train(dim_word=100,  # word vector dimensionality
 
             if numpy.mod(uidx, dispFreq) == 0:
                 print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
- 	    print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
+            print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'PD ', pd_duration, 'UD ', ud_duration
+            # print "saving", saveto
+            # numpy.savez(saveto, history_errs=history_errs, **unzip(tparams))
+
 
             # Check validation loss and compute metrics if forced
             if numpy.mod(uidx, validFreq) == 0:
@@ -1495,6 +1528,7 @@ def train(dim_word=100,  # word vector dimensionality
                                 else:
                                     params = unzip(tparams)
                                 print('Saving model to %s' % saveto)
+                                print params
                                 numpy.savez(saveto, history_errs=history_errs, **params)
                                 best_metric = m_score
                         else:
@@ -1503,6 +1537,7 @@ def train(dim_word=100,  # word vector dimensionality
                                 params = copy.copy(best_p)
                             else:
                                 params = unzip(tparams)
+                            print params
                             print('Saving model to %s' % saveto)
                             numpy.savez(saveto, history_errs=history_errs, **params)
                             bad_counter = 0
@@ -1565,6 +1600,7 @@ def train(dim_word=100,  # word vector dimensionality
         history_errs.append([valid_err, test_err])
 
         # abort training if perplexity has been increasing for too long
+        # TODO stop on m_score
         if eidx > patience and len(history_errs) > patience and valid_err >= numpy.array(history_errs)[:-patience,0].min():
              bad_counter += 1
              if bad_counter > patience:
@@ -1610,6 +1646,7 @@ def train(dim_word=100,  # word vector dimensionality
         if save_per_epoch:
             saving_to = "%s.%.2f" % (saveto.replace(".npz",""), valid_err)
             numpy.savez(saving_to, history_errs=history_errs, **unzip(tparams))
+
 
     # use the best parameters for final checkpoint (if they exist)
     if best_p is not None:
