@@ -350,7 +350,7 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
                     mask=None, context=None, one_step=False,
                     init_memory=None, init_state=None,
                     trng=None, use_noise=None, sampling=True,
-                    argmax=False, **kwargs):
+                    argmax=False, p_alpha=None, **kwargs):
 
     assert context, 'Context must be provided'
 
@@ -406,8 +406,8 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
             return _x[:, :, n*dim:(n+1)*dim]
         return _x[:, n*dim:(n+1)*dim]
 
-    def _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_=None, dp_att_=None,
-              p_alphas=None):
+    def _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, p_alphas=None,
+              dp_=None, dp_att_=None):
         """ Each variable is one time slice of the LSTM
         m_ - (mask), x_- (previous word), h_- (hidden state), c_- (lstm memory),
         a_ - (alpha distribution [eq (5)]), as_- (sample from alpha dist), ct_- (context),
@@ -424,17 +424,28 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
         alpha = tensor.dot(pctx_, tparams[_p(prefix,'U_att')])+tparams[_p(prefix, 'c_tt')]
         alpha_pre = alpha
         alpha_shp = alpha.shape
+        # print alpha.tag.test_value.shape
+
+        if options['sal_selector']:
+            # Mix prior region saliency probabilities with alphas
+            # Same principle as the "selector" beta
+            sal_sel_ = tensor.nnet.sigmoid(tensor.dot(h_,
+                                       tparams[_p(prefix, 'W_sal_sel')])+tparams[_p(prefix,'b_sal_sel')])
+            # print sal_sel_.tag.test_value.shape
+            sal_sel_ = sal_sel_.reshape([sal_sel_.shape[0]])
+            # print sal_sel_.tag.test_value.shape
+            # print "palphashape", p_alpha.tag.test_value.shape
+            alpha_rshp = alpha.reshape([alpha_shp[0], alpha_shp[1]])
+            alpha_rshp = sal_sel_[:, None] * alpha_rshp + (1 - sal_sel_[:, None]) * p_alpha
+            alpha = alpha_rshp.reshape(alpha_shp)
+            # alpha_shp = alpha.shape
 
         if options['attn_type'] == 'deterministic':
+            # print alpha.tag.test_value.shape
             alpha = tensor.nnet.softmax(alpha.reshape([alpha_shp[0],alpha_shp[1]])) # softmax
-	    if options['sal_selector']:
-            # Mix prior region saliency probabilities with alphas
-            	sal_sel_ = tensor.nnet.sigmoid(tensor.dot(h_,
-                                           tparams[_p(prefix, 'W_sal_sel')])+tparams[_p(prefix,'b_sal_sel')])
-            	sal_sel_ = sel_.reshape([sel_.shape[0]])
-            	alpha = sal_sel_[:, None] * alpha + (1 - sal_sel_[:, None]) * p_alpha
-            	alpha_pre = alpha
-            	alpha_shp = alpha.shape
+
+
+
 	    ctx_ = (context * alpha[:,:,None]).sum(1) # current context
             alpha_sample = alpha # you can return something else reasonable here to debug
         else:
@@ -455,6 +466,7 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
             sel_ = tensor.nnet.sigmoid(tensor.dot(h_, tparams[_p(prefix, 'W_sel')])+tparams[_p(prefix,'b_sel')])
             sel_ = sel_.reshape([sel_.shape[0]])
             ctx_ = sel_[:,None] * ctx_
+            # print ctx_.tag.test_value.shape
 
         preact = tensor.dot(h_, tparams[_p(prefix, 'U')])
         preact += x_
@@ -483,18 +495,33 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
         h = m_[:,None] * h + (1. - m_)[:,None] * h_
 
         rval = [h, c, alpha, alpha_sample, ctx_]
+
         if options['selector']:
             rval += [sel_]
+        if options['sal_selector']:
+            rval += [sal_sel_]
+
         rval += [pstate_, pctx_, i, f, o, preact, alpha_pre]+pctx_list
         return rval
 
     if options['use_dropout_lstm']:
-        if options['selector']:
+        if options['selector'] and options['sal_selector']:
+            print "Dropout Both selectors"
+            _step0 = lambda m_, x_, dp_, h_, c_, a_, as_, ct_, sel_, sal_sel_, pctx_, p_alpha: \
+                            _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_, p_alpha)
+        elif options['selector']:
+            print "only beta"
             _step0 = lambda m_, x_, dp_, h_, c_, a_, as_, ct_, sel_, pctx_: \
                             _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_)
+        elif options['sal_selector']:
+            print "only gamma"
+            _step0 = lambda m_, x_, dp_, h_, c_, a_, as_, ct_, sal_sel_, pctx_, p_alpha: \
+                            _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_, p_alpha)
         else:
+            print "no selector"
             _step0 = lambda m_, x_, dp_, h_, c_, a_, as_, ct_, pctx_: \
                             _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, dp_)
+
         dp_shape = state_below.shape
         if one_step:
             dp_mask = tensor.switch(use_noise,
@@ -507,20 +534,34 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
                                                   p=0.5, n=1, dtype=state_below.dtype),
                                     tensor.alloc(0.5, dp_shape[0], dp_shape[1], 3*dim))
     else:
-        if options['selector']:
+        if options['selector'] and options['sal_selector']:
+            print "No drop Both selectors"
+            _step0 = lambda m_, x_, h_, c_, a_, as_, ct_, sel_, sal_sel, pctx_, p_alpha: _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, p_alpha)
+        elif options['selector']:
             _step0 = lambda m_, x_, h_, c_, a_, as_, ct_, sel_, pctx_: _step(m_, x_, h_, c_, a_, as_, ct_, pctx_)
+        elif options['sal_selector']:
+            _step0 = lambda m_, x_, h_, c_, a_, as_, ct_, sal_sel, pctx_, p_alpha: _step(m_, x_, h_, c_, a_, as_, ct_, pctx_, p_alpha)
         else:
             _step0 = lambda m_, x_, h_, c_, a_, as_, ct_, pctx_: _step(m_, x_, h_, c_, a_, as_, ct_, pctx_)
 
     if one_step:
         if options['use_dropout_lstm']:
-            if options['selector']:
+            if options['selector'] and options['sal_selector']:
+                print "Both selectors"
+                rval = _step0(mask, state_below, dp_mask, init_state, init_memory, None, None, None, None, None, pctx_, p_alpha)
+            elif options['selector']:
                 rval = _step0(mask, state_below, dp_mask, init_state, init_memory, None, None, None, None, pctx_)
+            elif options['sal_selector']:
+                rval = _step0(mask, state_below, dp_mask, init_state, init_memory, None, None, None, None, pctx_, p_alpha)
             else:
                 rval = _step0(mask, state_below, dp_mask, init_state, init_memory, None, None, None, pctx_)
         else:
-            if options['selector']:
+            if options['selector'] and options['sal_selector']:
+                rval = _step0(mask, state_below, init_state, init_memory, None, None, None, None, None, pctx_, p_alpha)
+            elif options['selector']:
                 rval = _step0(mask, state_below, init_state, init_memory, None, None, None, None, pctx_)
+            elif options['sal_selector']:
+                rval = _step0(mask, state_below, init_state, init_memory, None, None, None, None, pctx_, p_alpha)
             else:
                 rval = _step0(mask, state_below, init_state, init_memory, None, None, None, pctx_)
         return rval
@@ -535,6 +576,9 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
                         tensor.alloc(0., n_samples, context.shape[2])]
         if options['selector']:
             outputs_info += [tensor.alloc(0., n_samples)]
+        if options['sal_selector']:
+            outputs_info += [tensor.alloc(0., n_samples)]
+
         outputs_info += [None,
                          None,
                          None,
@@ -545,7 +589,7 @@ def lstm_cond_layer(tparams, state_below, options, prefix='lstm',
         rval, updates = theano.scan(_step0,
                                     sequences=seqs,
                                     outputs_info=outputs_info,
-                                    non_sequences=[pctx_],
+                                    non_sequences=[pctx_, p_alpha],
                                     name=_p(prefix, '_layers'),
                                     n_steps=nsteps, profile=False)
         return rval, updates
@@ -651,11 +695,11 @@ def build_model(tparams, options, sampling=True):
 
     # description string: #words x #samples,
     x = tensor.matrix('x', dtype='int64')
-    # x.tag.test_value =  np.random.randint(10, size=(10, 2)).astype("int64")
+    # x.tag.test_value =  np.random.randint(10, size=(10, 40)).astype("int64")
     mask = tensor.matrix('mask', dtype='float32')
     # context: #samples x #annotations x dim
     ctx = tensor.tensor3('ctx', dtype='float32')
-    # ctx.tag.test_value = np.random.random(size=(2, 3, options['ctx_dim'])).astype("float32")
+    # ctx.tag.test_value = np.random.random(size=(40, 196, options['ctx_dim'])).astype("float32")
 
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
@@ -722,6 +766,7 @@ def build_model(tparams, options, sampling=True):
     proj, updates = get_layer('lstm_cond')[1](tparams, emb, options,
                                               prefix='decoder',
                                               mask=mask, context=ctx0,
+                                              p_alpha=p_alpha,
                                               one_step=False,
                                               init_state=init_state,
                                               init_memory=init_memory,
@@ -738,6 +783,7 @@ def build_model(tparams, options, sampling=True):
             proj, updates = get_layer('lstm_cond')[1](tparams, proj_h, options,
                                                       prefix='decoder_%d'%lidx,
                                                       mask=mask, context=ctx0,
+                                                      p_alpha=p_alpha,
                                                       one_step=False,
                                                       init_state=init_state,
                                                       init_memory=init_memory,
@@ -754,6 +800,8 @@ def build_model(tparams, options, sampling=True):
     # [beta value explained in note 4.2.1 "doubly stochastic attention"]
     if options['selector']:
         sels = proj[5]
+    if options['sal_selector']:
+        sal_sels = proj[6]
 
     if options['use_dropout']:
         proj_h = dropout_layer(proj_h, use_noise, trng)
@@ -793,10 +841,11 @@ def build_model(tparams, options, sampling=True):
     opt_outs = dict()
     if options['selector']:
         opt_outs['selector'] = sels
+    if options['sal_selector']:
+        opt_outs['sal_selector'] = sal_sels
     if options['attn_type'] == 'stochastic':
         opt_outs['masked_cost'] = masked_cost # need this for reinforce later
         opt_outs['attn_Trueupdates'] = attn_updates # this is to update the rng
-    print(ctx)
     # print(ctx.tag.test_value)
     if options['saliency']:
         pack = [x, mask, ctx, p_alpha]
@@ -847,7 +896,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
         p_alpha = tensor.addbroadcast(p_alpha, 1)
         p_alpha = tensor.nnet.softmax(p_alpha / options['temp_sal'])
         ctx_init = ctx * p_alpha
-        ctx.name = 'ctx'
+
     print "Sampler test value"
     # print(ctx.tag.test_value)
     # sys.text
@@ -897,6 +946,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
     proj = get_layer('lstm_cond')[1](tparams, emb, options,
                                      prefix='decoder',
                                      mask=None, context=ctx,
+                                     p_alpha=p_alpha,
                                      one_step=True,
                                      init_state=init_state[0],
                                      init_memory=init_memory[0],
@@ -911,6 +961,7 @@ def build_sampler(tparams, options, use_noise, trng, sampling=True):
             proj = get_layer('lstm_cond')[1](tparams, proj_h, options,
                                              prefix='decoder_%d'%lidx,
                                              context=ctx,
+                                             p_alpha=p_alpha,
                                              one_step=True,
                                              init_state=init_state[lidx],
                                              init_memory=init_memory[lidx],
@@ -1010,6 +1061,9 @@ def gen_sample(tparams, f_init, f_next, ctx0, options,
     ctx0 = rval[0]
     next_state = []
     next_memory = []
+
+
+
     # the states are returned as a: (dim,) and this is just a reshape to (1, dim)
     for lidx in xrange(options['n_layers_lstm']):
         next_state.append(rval[1+lidx])
@@ -1267,7 +1321,8 @@ def train(dim_word=100,  # word vector dimensionality
           decay_c=0.,  # weight decay coeff
           alpha_c=0.,  # doubly stochastic coeff
           lrate=0.01,  # used only for SGD
-          selector=False,  # selector (see paper)
+          selector=True,  # selector (see paper)
+          sal_selector=True,  # trades of saliency model vs attention model
           n_words=10000,  # vocab size
           maxlen=100,  # maximum length of the description
           optimizer='rmsprop',
@@ -1451,14 +1506,15 @@ def train(dim_word=100,  # word vector dimensionality
     estop = False
     best_err = numpy.inf
     best_metric = 0
-    print "Training parameters:"
-    print tparams
+
     for eidx in xrange(max_epochs):
         n_samples = 0
 
         print 'Epoch ', eidx
 
         for caps in train_iter:
+            if uidx == 2:
+                break
             n_samples += len(caps)
             uidx += 1
             # turn on dropout
@@ -1528,7 +1584,6 @@ def train(dim_word=100,  # word vector dimensionality
                                 else:
                                     params = unzip(tparams)
                                 print('Saving model to %s' % saveto)
-                                print params
                                 numpy.savez(saveto, history_errs=history_errs, **params)
                                 best_metric = m_score
                         else:
@@ -1537,7 +1592,6 @@ def train(dim_word=100,  # word vector dimensionality
                                 params = copy.copy(best_p)
                             else:
                                 params = unzip(tparams)
-                            print params
                             print('Saving model to %s' % saveto)
                             numpy.savez(saveto, history_errs=history_errs, **params)
                             bad_counter = 0
